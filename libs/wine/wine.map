@@ -9,6 +9,7 @@ WINE_1.0
     wine_anon_mmap;
     wine_casemap_lower;
     wine_casemap_upper;
+    wine_dladdr;
     wine_dlclose;
     wine_dll_enum_load_path;
     wine_dll_set_callback;
@@ -19,6 +20,7 @@ WINE_1.0
     wine_get_build_id;
     wine_get_config_dir;
     wine_get_data_dir;
+    wine_get_libs;
     wine_get_server_dir;
     wine_get_user_name;
     wine_get_version;
