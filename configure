@@ -902,6 +902,7 @@ with_xshm
 with_xslt
 with_xxf86vm
 with_zlib
+with_va
 with_wine_tools
 with_wine64
 enable_largefile
@@ -2605,6 +2606,7 @@ Optional Packages:
   --without-xslt          do not use XSLT
   --without-xxf86vm       do not use XFree video mode extension
   --without-zlib          do not use Zlib (data compression)
+  --without-va            do not use VA (GPU video acceleration)
   --with-wine-tools=DIR   use Wine tools from directory DIR
   --with-wine64=DIR       use the 64-bit Wine in DIR for a Wow64 build
   --with-x                use the X Window System
@@ -4226,6 +4228,12 @@ fi
 # Check whether --with-zlib was given.
 if test "${with_zlib+set}" = set; then :
   withval=$with_zlib;
+fi
+
+
+# Check whether --with-va was given.
+if test "${with_va+set}" = set; then :
+  withval=$with_va; if test "x$withval" = "xno"; then ac_cv_header_va_va_x11_h=no; fi
 fi
 
 
@@ -12721,6 +12729,147 @@ OpenGL and Direct3D won't be supported." ;;
   *)   as_fn_error $? "$opengl_msg
 OpenGL and Direct3D won't be supported.
 This is an error since --with-opengl was requested." "$LINENO" 5 ;;
+esac
+
+fi
+
+        for ac_header in va/va_x11.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "va/va_x11.h" "ac_cv_header_va_va_x11_h" "$ac_includes_default"
+if test "x$ac_cv_header_va_va_x11_h" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_VA_VA_X11_H 1
+_ACEOF
+
+fi
+
+done
+
+    if test "$ac_cv_header_va_va_x11_h" = "yes"
+    then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for -lva" >&5
+$as_echo_n "checking for -lva... " >&6; }
+if ${ac_cv_lib_soname_va+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_soname_save_LIBS=$LIBS
+LIBS="-lva $X_LIBS $LIBS"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char vaQuerySurfaceAttributes ();
+int
+main ()
+{
+return vaQuerySurfaceAttributes ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  case "$LIBEXT" in
+    dll) ac_cv_lib_soname_va=`$ac_cv_path_LDD conftest.exe | grep "va" | sed -e "s/dll.*/dll/"';2,$d'` ;;
+    dylib) ac_cv_lib_soname_va=`$OTOOL -L conftest$ac_exeext | grep "libva\\.[0-9A-Za-z.]*dylib" | sed -e "s/^.*\/\(libva\.[0-9A-Za-z.]*dylib\).*$/\1/"';2,$d'` ;;
+    *) ac_cv_lib_soname_va=`$READELF -d conftest$ac_exeext | grep "NEEDED.*libva\\.$LIBEXT" | sed -e "s/^.*\\[\\(libva\\.$LIBEXT[^	 ]*\\)\\].*$/\1/"';2,$d'`
+       if ${ac_cv_lib_soname_va:+false} :; then :
+  ac_cv_lib_soname_va=`$LDD conftest$ac_exeext | grep "libva\\.$LIBEXT" | sed -e "s/^.*\(libva\.$LIBEXT[^	 ]*\).*$/\1/"';2,$d'`
+fi ;;
+  esac
+else
+  ac_cv_lib_soname_va=
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  LIBS=$ac_check_soname_save_LIBS
+fi
+if ${ac_cv_lib_soname_va:+false} :; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: not found" >&5
+$as_echo "not found" >&6; }
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_soname_va" >&5
+$as_echo "$ac_cv_lib_soname_va" >&6; }
+
+cat >>confdefs.h <<_ACEOF
+#define SONAME_LIBVA "$ac_cv_lib_soname_va"
+_ACEOF
+
+
+fi
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for -lva-x11" >&5
+$as_echo_n "checking for -lva-x11... " >&6; }
+if ${ac_cv_lib_soname_va_x11+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_soname_save_LIBS=$LIBS
+LIBS="-lva-x11 $X_LIBS -lva $LIBS"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char vaGetDisplay ();
+int
+main ()
+{
+return vaGetDisplay ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  case "$LIBEXT" in
+    dll) ac_cv_lib_soname_va_x11=`$ac_cv_path_LDD conftest.exe | grep "va-x11" | sed -e "s/dll.*/dll/"';2,$d'` ;;
+    dylib) ac_cv_lib_soname_va_x11=`$OTOOL -L conftest$ac_exeext | grep "libva-x11\\.[0-9A-Za-z.]*dylib" | sed -e "s/^.*\/\(libva-x11\.[0-9A-Za-z.]*dylib\).*$/\1/"';2,$d'` ;;
+    *) ac_cv_lib_soname_va_x11=`$READELF -d conftest$ac_exeext | grep "NEEDED.*libva-x11\\.$LIBEXT" | sed -e "s/^.*\\[\\(libva-x11\\.$LIBEXT[^	 ]*\\)\\].*$/\1/"';2,$d'`
+       if ${ac_cv_lib_soname_va_x11:+false} :; then :
+  ac_cv_lib_soname_va_x11=`$LDD conftest$ac_exeext | grep "libva-x11\\.$LIBEXT" | sed -e "s/^.*\(libva-x11\.$LIBEXT[^	 ]*\).*$/\1/"';2,$d'`
+fi ;;
+  esac
+else
+  ac_cv_lib_soname_va_x11=
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  LIBS=$ac_check_soname_save_LIBS
+fi
+if ${ac_cv_lib_soname_va_x11:+false} :; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: not found" >&5
+$as_echo "not found" >&6; }
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_soname_va_x11" >&5
+$as_echo "$ac_cv_lib_soname_va_x11" >&6; }
+
+cat >>confdefs.h <<_ACEOF
+#define SONAME_LIBVA_X11 "$ac_cv_lib_soname_va_x11"
+_ACEOF
+
+
+fi
+        if test "x$ac_cv_lib_soname_va" != "x" -a "x$ac_cv_lib_soname_va_x11" != "x"
+        then
+
+$as_echo "#define HAVE_VAAPI 1" >>confdefs.h
+
+        fi
+    fi
+    if test "x$ac_cv_lib_soname_va" = "x" -o "x$ac_cv_lib_soname_va_x11" = "x"; then :
+  case "x$with_va" in
+  x)   as_fn_append wine_notices "|libva ${notice_platform}development files not found, GPU video acceleration won't be supported." ;;
+  xno) ;;
+  *)   as_fn_error $? "libva ${notice_platform}development files not found, GPU video acceleration won't be supported.
+This is an error since --with-va was requested." "$LINENO" 5 ;;
 esac
 
 fi
