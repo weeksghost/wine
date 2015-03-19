@@ -60,7 +60,7 @@ typedef struct
 
 typedef struct
 {
-    int dummy;
+    int queue_bits;
 } shmlocal_t;
 
 
@@ -6858,7 +6858,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 610
+#define SERVER_PROTOCOL_VERSION 611
 
 /* ### protocol_version end ### */
 
