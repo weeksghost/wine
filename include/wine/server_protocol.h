@@ -55,7 +55,7 @@ struct request_max_size
 
 typedef struct
 {
-    int dummy;
+    unsigned int last_input_time;
 } shmglobal_t;
 
 typedef struct
@@ -6858,7 +6858,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 611
+#define SERVER_PROTOCOL_VERSION 612
 
 /* ### protocol_version end ### */
 
