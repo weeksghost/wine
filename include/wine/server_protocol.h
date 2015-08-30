@@ -1182,6 +1182,16 @@ struct close_handle_reply
 };
 
 
+struct socket_cleanup_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+};
+struct socket_cleanup_reply
+{
+    struct reply_header __header;
+};
+
 
 struct set_handle_info_request
 {
@@ -5953,6 +5963,7 @@ enum request
     REQ_queue_apc,
     REQ_get_apc_result,
     REQ_close_handle,
+    REQ_socket_cleanup,
     REQ_set_handle_info,
     REQ_dup_handle,
     REQ_open_process,
@@ -6265,6 +6276,7 @@ union generic_request
     struct queue_apc_request queue_apc_request;
     struct get_apc_result_request get_apc_result_request;
     struct close_handle_request close_handle_request;
+    struct socket_cleanup_request socket_cleanup_request;
     struct set_handle_info_request set_handle_info_request;
     struct dup_handle_request dup_handle_request;
     struct open_process_request open_process_request;
@@ -6575,6 +6587,7 @@ union generic_reply
     struct queue_apc_reply queue_apc_reply;
     struct get_apc_result_reply get_apc_result_reply;
     struct close_handle_reply close_handle_reply;
+    struct socket_cleanup_reply socket_cleanup_reply;
     struct set_handle_info_reply set_handle_info_reply;
     struct dup_handle_reply dup_handle_reply;
     struct open_process_reply open_process_reply;
@@ -6861,7 +6874,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 613
+#define SERVER_PROTOCOL_VERSION 614
 
 /* ### protocol_version end ### */
 
