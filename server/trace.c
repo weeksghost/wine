@@ -4659,6 +4659,17 @@ static void dump_resume_process_request( const struct resume_process_request *re
     fprintf( stderr, " handle=%04x", req->handle );
 }
 
+static void dump_get_system_info_request( const struct get_system_info_request *req )
+{
+}
+
+static void dump_get_system_info_reply( const struct get_system_info_reply *req )
+{
+    fprintf( stderr, " processes=%08x", req->processes );
+    fprintf( stderr, ", threads=%08x", req->threads );
+    fprintf( stderr, ", handles=%08x", req->handles );
+}
+
 static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_new_process_request,
     (dump_func)dump_exec_process_request,
@@ -4962,6 +4973,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_terminate_job_request,
     (dump_func)dump_suspend_process_request,
     (dump_func)dump_resume_process_request,
+    (dump_func)dump_get_system_info_request,
 };
 
 static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
@@ -5267,6 +5279,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     NULL,
     NULL,
     NULL,
+    (dump_func)dump_get_system_info_reply,
 };
 
 static const char * const req_names[REQ_NB_REQUESTS] = {
@@ -5572,6 +5585,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "terminate_job",
     "suspend_process",
     "resume_process",
+    "get_system_info",
 };
 
 static const struct

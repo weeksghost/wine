@@ -415,6 +415,7 @@ DECL_HANDLER(set_job_completion_port);
 DECL_HANDLER(terminate_job);
 DECL_HANDLER(suspend_process);
 DECL_HANDLER(resume_process);
+DECL_HANDLER(get_system_info);
 
 #ifdef WANT_REQUEST_HANDLERS
 
@@ -723,6 +724,7 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_terminate_job,
     (req_handler)req_suspend_process,
     (req_handler)req_resume_process,
+    (req_handler)req_get_system_info,
 };
 
 C_ASSERT( sizeof(affinity_t) == 8 );
@@ -2478,6 +2480,11 @@ C_ASSERT( FIELD_OFFSET(struct suspend_process_request, handle) == 12 );
 C_ASSERT( sizeof(struct suspend_process_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct resume_process_request, handle) == 12 );
 C_ASSERT( sizeof(struct resume_process_request) == 16 );
+C_ASSERT( sizeof(struct get_system_info_request) == 16 );
+C_ASSERT( FIELD_OFFSET(struct get_system_info_reply, processes) == 8 );
+C_ASSERT( FIELD_OFFSET(struct get_system_info_reply, threads) == 12 );
+C_ASSERT( FIELD_OFFSET(struct get_system_info_reply, handles) == 16 );
+C_ASSERT( sizeof(struct get_system_info_reply) == 24 );
 
 #endif  /* WANT_REQUEST_HANDLERS */
 

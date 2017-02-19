@@ -5868,6 +5868,21 @@ struct resume_process_reply
 };
 
 
+struct get_system_info_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+};
+struct get_system_info_reply
+{
+    struct reply_header __header;
+    unsigned int processes;
+    unsigned int threads;
+    unsigned int handles;
+    char __pad_20[4];
+};
+
+
 enum request
 {
     REQ_new_process,
@@ -6172,6 +6187,7 @@ enum request
     REQ_terminate_job,
     REQ_suspend_process,
     REQ_resume_process,
+    REQ_get_system_info,
     REQ_NB_REQUESTS
 };
 
@@ -6481,6 +6497,7 @@ union generic_request
     struct terminate_job_request terminate_job_request;
     struct suspend_process_request suspend_process_request;
     struct resume_process_request resume_process_request;
+    struct get_system_info_request get_system_info_request;
 };
 union generic_reply
 {
@@ -6788,11 +6805,12 @@ union generic_reply
     struct terminate_job_reply terminate_job_reply;
     struct suspend_process_reply suspend_process_reply;
     struct resume_process_reply resume_process_reply;
+    struct get_system_info_reply get_system_info_reply;
 };
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 602
+#define SERVER_PROTOCOL_VERSION 603
 
 /* ### protocol_version end ### */
 
