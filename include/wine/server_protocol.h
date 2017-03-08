@@ -2480,9 +2480,10 @@ struct next_thread_reply
     int          count;
     process_id_t pid;
     thread_id_t  tid;
+    char __pad_20[4];
+    timeout_t    creation_time;
     int          base_pri;
     int          delta_pri;
-    char __pad_28[4];
 };
 
 
@@ -6812,7 +6813,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 604
+#define SERVER_PROTOCOL_VERSION 605
 
 /* ### protocol_version end ### */
 

@@ -2404,6 +2404,7 @@ static void dump_next_thread_reply( const struct next_thread_reply *req )
     fprintf( stderr, " count=%d", req->count );
     fprintf( stderr, ", pid=%04x", req->pid );
     fprintf( stderr, ", tid=%04x", req->tid );
+    dump_timeout( ", creation_time=", &req->creation_time );
     fprintf( stderr, ", base_pri=%d", req->base_pri );
     fprintf( stderr, ", delta_pri=%d", req->delta_pri );
 }
