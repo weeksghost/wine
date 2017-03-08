@@ -4291,6 +4291,17 @@ static void dump_get_object_type_reply( const struct get_object_type_reply *req 
     dump_varargs_unicode_str( ", type=", cur_size );
 }
 
+static void dump_get_object_type_by_index_request( const struct get_object_type_by_index_request *req )
+{
+    fprintf( stderr, " index=%08x", req->index );
+}
+
+static void dump_get_object_type_by_index_reply( const struct get_object_type_by_index_reply *req )
+{
+    fprintf( stderr, " total=%u", req->total );
+    dump_varargs_unicode_str( ", type=", cur_size );
+}
+
 static void dump_unlink_object_request( const struct unlink_object_request *req )
 {
     fprintf( stderr, " handle=%04x", req->handle );
@@ -5025,6 +5036,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_query_symlink_request,
     (dump_func)dump_get_object_info_request,
     (dump_func)dump_get_object_type_request,
+    (dump_func)dump_get_object_type_by_index_request,
     (dump_func)dump_unlink_object_request,
     (dump_func)dump_get_token_impersonation_level_request,
     (dump_func)dump_allocate_locally_unique_id_request,
@@ -5341,6 +5353,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_query_symlink_reply,
     (dump_func)dump_get_object_info_reply,
     (dump_func)dump_get_object_type_reply,
+    (dump_func)dump_get_object_type_by_index_reply,
     NULL,
     (dump_func)dump_get_token_impersonation_level_reply,
     (dump_func)dump_allocate_locally_unique_id_reply,
@@ -5657,6 +5670,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "query_symlink",
     "get_object_info",
     "get_object_type",
+    "get_object_type_by_index",
     "unlink_object",
     "get_token_impersonation_level",
     "allocate_locally_unique_id",
