@@ -2461,8 +2461,9 @@ struct next_process_reply
     int          priority;
     int          handles;
     int          unix_pid;
-    /* VARARG(filename,unicode_str); */
     char __pad_36[4];
+    timeout_t    start_time;
+    /* VARARG(filename,unicode_str); */
 };
 
 
@@ -6813,7 +6814,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 605
+#define SERVER_PROTOCOL_VERSION 606
 
 /* ### protocol_version end ### */
 

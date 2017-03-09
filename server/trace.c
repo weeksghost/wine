@@ -2390,6 +2390,7 @@ static void dump_next_process_reply( const struct next_process_reply *req )
     fprintf( stderr, ", priority=%d", req->priority );
     fprintf( stderr, ", handles=%d", req->handles );
     fprintf( stderr, ", unix_pid=%d", req->unix_pid );
+    dump_timeout( ", start_time=", &req->start_time );
     dump_varargs_unicode_str( ", filename=", cur_size );
 }
 
