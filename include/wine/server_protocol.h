@@ -2485,6 +2485,8 @@ struct next_thread_reply
     timeout_t    creation_time;
     int          base_pri;
     int          delta_pri;
+    int          unix_tid;
+    char __pad_44[4];
 };
 
 
@@ -6814,7 +6816,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 606
+#define SERVER_PROTOCOL_VERSION 607
 
 /* ### protocol_version end ### */
 
