@@ -3922,6 +3922,19 @@ struct set_window_region_reply
 
 
 
+struct set_layer_region_request
+{
+    struct request_header __header;
+    user_handle_t  window;
+    /* VARARG(region,rectangles); */
+};
+struct set_layer_region_reply
+{
+    struct reply_header __header;
+};
+
+
+
 struct get_update_region_request
 {
     struct request_header __header;
@@ -6251,6 +6264,7 @@ enum request
     REQ_get_surface_region,
     REQ_get_window_region,
     REQ_set_window_region,
+    REQ_set_layer_region,
     REQ_get_update_region,
     REQ_update_window_zorder,
     REQ_redraw_window,
@@ -6572,6 +6586,7 @@ union generic_request
     struct get_surface_region_request get_surface_region_request;
     struct get_window_region_request get_window_region_request;
     struct set_window_region_request set_window_region_request;
+    struct set_layer_region_request set_layer_region_request;
     struct get_update_region_request get_update_region_request;
     struct update_window_zorder_request update_window_zorder_request;
     struct redraw_window_request redraw_window_request;
@@ -6891,6 +6906,7 @@ union generic_reply
     struct get_surface_region_reply get_surface_region_reply;
     struct get_window_region_reply get_window_region_reply;
     struct set_window_region_reply set_window_region_reply;
+    struct set_layer_region_reply set_layer_region_reply;
     struct get_update_region_reply get_update_region_reply;
     struct update_window_zorder_reply update_window_zorder_reply;
     struct redraw_window_reply redraw_window_reply;
@@ -7028,7 +7044,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 632
+#define SERVER_PROTOCOL_VERSION 633
 
 /* ### protocol_version end ### */
 
