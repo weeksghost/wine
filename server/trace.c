@@ -4387,6 +4387,16 @@ static void dump_get_token_statistics_reply( const struct get_token_statistics_r
     fprintf( stderr, ", privilege_count=%d", req->privilege_count );
 }
 
+static void dump_get_token_elevation_type_request( const struct get_token_elevation_type_request *req )
+{
+    fprintf( stderr, " handle=%04x", req->handle );
+}
+
+static void dump_get_token_elevation_type_reply( const struct get_token_elevation_type_reply *req )
+{
+    fprintf( stderr, " elevation=%08x", req->elevation );
+}
+
 static void dump_create_completion_request( const struct create_completion_request *req )
 {
     fprintf( stderr, " access=%08x", req->access );
@@ -4894,6 +4904,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_get_kernel_object_handle_request,
     (dump_func)dump_make_process_system_request,
     (dump_func)dump_get_token_statistics_request,
+    (dump_func)dump_get_token_elevation_type_request,
     (dump_func)dump_create_completion_request,
     (dump_func)dump_open_completion_request,
     (dump_func)dump_add_completion_request,
@@ -5195,6 +5206,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_get_kernel_object_handle_reply,
     (dump_func)dump_make_process_system_reply,
     (dump_func)dump_get_token_statistics_reply,
+    (dump_func)dump_get_token_elevation_type_reply,
     (dump_func)dump_create_completion_reply,
     (dump_func)dump_open_completion_reply,
     NULL,
@@ -5496,6 +5508,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "get_kernel_object_handle",
     "make_process_system",
     "get_token_statistics",
+    "get_token_elevation_type",
     "create_completion",
     "open_completion",
     "add_completion",
