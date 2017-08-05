@@ -5442,6 +5442,18 @@ struct create_token_reply
 
 
 
+struct replace_process_token_request
+{
+    struct request_header __header;
+    obj_handle_t  token;
+};
+struct replace_process_token_reply
+{
+    struct reply_header __header;
+};
+
+
+
 struct create_completion_request
 {
     struct request_header __header;
@@ -6132,6 +6144,7 @@ enum request
     REQ_get_token_statistics,
     REQ_get_token_elevation_type,
     REQ_create_token,
+    REQ_replace_process_token,
     REQ_create_completion,
     REQ_open_completion,
     REQ_add_completion,
@@ -6440,6 +6453,7 @@ union generic_request
     struct get_token_statistics_request get_token_statistics_request;
     struct get_token_elevation_type_request get_token_elevation_type_request;
     struct create_token_request create_token_request;
+    struct replace_process_token_request replace_process_token_request;
     struct create_completion_request create_completion_request;
     struct open_completion_request open_completion_request;
     struct add_completion_request add_completion_request;
@@ -6746,6 +6760,7 @@ union generic_reply
     struct get_token_statistics_reply get_token_statistics_reply;
     struct get_token_elevation_type_reply get_token_elevation_type_reply;
     struct create_token_reply create_token_reply;
+    struct replace_process_token_reply replace_process_token_reply;
     struct create_completion_reply create_completion_reply;
     struct open_completion_reply open_completion_reply;
     struct add_completion_reply add_completion_reply;
@@ -6777,7 +6792,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 600
+#define SERVER_PROTOCOL_VERSION 601
 
 /* ### protocol_version end ### */
 
