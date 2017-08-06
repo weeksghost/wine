@@ -777,10 +777,10 @@ struct new_process_request
     unsigned int access;
     client_cpu_t cpu;
     data_size_t  info_size;
+    obj_handle_t token;
     /* VARARG(objattr,object_attributes); */
     /* VARARG(info,startup_info,info_size); */
     /* VARARG(env,unicode_str); */
-    char __pad_44[4];
 };
 struct new_process_reply
 {
@@ -6792,7 +6792,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 601
+#define SERVER_PROTOCOL_VERSION 602
 
 /* ### protocol_version end ### */
 
