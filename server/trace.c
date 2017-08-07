@@ -4073,6 +4073,17 @@ static void dump_get_token_sid_reply( const struct get_token_sid_reply *req )
     dump_varargs_SID( ", sid=", cur_size );
 }
 
+static void dump_get_token_integrity_request( const struct get_token_integrity_request *req )
+{
+    fprintf( stderr, " handle=%04x", req->handle );
+}
+
+static void dump_get_token_integrity_reply( const struct get_token_integrity_reply *req )
+{
+    fprintf( stderr, " sid_len=%u", req->sid_len );
+    dump_varargs_SID( ", sid=", cur_size );
+}
+
 static void dump_get_token_groups_request( const struct get_token_groups_request *req )
 {
     fprintf( stderr, " handle=%04x", req->handle );
@@ -4874,6 +4885,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_filter_token_request,
     (dump_func)dump_access_check_request,
     (dump_func)dump_get_token_sid_request,
+    (dump_func)dump_get_token_integrity_request,
     (dump_func)dump_get_token_groups_request,
     (dump_func)dump_get_token_default_dacl_request,
     (dump_func)dump_set_token_default_dacl_request,
@@ -5176,6 +5188,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_filter_token_reply,
     (dump_func)dump_access_check_reply,
     (dump_func)dump_get_token_sid_reply,
+    (dump_func)dump_get_token_integrity_reply,
     (dump_func)dump_get_token_groups_reply,
     (dump_func)dump_get_token_default_dacl_reply,
     NULL,
@@ -5478,6 +5491,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "filter_token",
     "access_check",
     "get_token_sid",
+    "get_token_integrity",
     "get_token_groups",
     "get_token_default_dacl",
     "set_token_default_dacl",

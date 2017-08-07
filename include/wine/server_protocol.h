@@ -4935,6 +4935,19 @@ struct get_token_sid_reply
     char __pad_12[4];
 };
 
+struct get_token_integrity_request
+{
+    struct request_header __header;
+    obj_handle_t    handle;
+};
+struct get_token_integrity_reply
+{
+    struct reply_header __header;
+    data_size_t     sid_len;
+    /* VARARG(sid,SID); */
+    char __pad_12[4];
+};
+
 struct get_token_groups_request
 {
     struct request_header __header;
@@ -6072,6 +6085,7 @@ enum request
     REQ_filter_token,
     REQ_access_check,
     REQ_get_token_sid,
+    REQ_get_token_integrity,
     REQ_get_token_groups,
     REQ_get_token_default_dacl,
     REQ_set_token_default_dacl,
@@ -6378,6 +6392,7 @@ union generic_request
     struct filter_token_request filter_token_request;
     struct access_check_request access_check_request;
     struct get_token_sid_request get_token_sid_request;
+    struct get_token_integrity_request get_token_integrity_request;
     struct get_token_groups_request get_token_groups_request;
     struct get_token_default_dacl_request get_token_default_dacl_request;
     struct set_token_default_dacl_request set_token_default_dacl_request;
@@ -6682,6 +6697,7 @@ union generic_reply
     struct filter_token_reply filter_token_reply;
     struct access_check_reply access_check_reply;
     struct get_token_sid_reply get_token_sid_reply;
+    struct get_token_integrity_reply get_token_integrity_reply;
     struct get_token_groups_reply get_token_groups_reply;
     struct get_token_default_dacl_reply get_token_default_dacl_reply;
     struct set_token_default_dacl_reply set_token_default_dacl_reply;
@@ -6744,7 +6760,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 598
+#define SERVER_PROTOCOL_VERSION 599
 
 /* ### protocol_version end ### */
 
