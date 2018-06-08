@@ -5938,6 +5938,22 @@ struct get_system_info_reply
 };
 
 
+struct create_esync_request
+{
+    struct request_header __header;
+    unsigned int access;
+    int          initval;
+    int          flags;
+    /* VARARG(objattr,object_attributes); */
+};
+struct create_esync_reply
+{
+    struct reply_header __header;
+    obj_handle_t handle;
+    char __pad_12[4];
+};
+
+
 enum request
 {
     REQ_new_process,
@@ -6246,6 +6262,7 @@ enum request
     REQ_suspend_process,
     REQ_resume_process,
     REQ_get_system_info,
+    REQ_create_esync,
     REQ_NB_REQUESTS
 };
 
@@ -6559,6 +6576,7 @@ union generic_request
     struct suspend_process_request suspend_process_request;
     struct resume_process_request resume_process_request;
     struct get_system_info_request get_system_info_request;
+    struct create_esync_request create_esync_request;
 };
 union generic_reply
 {
@@ -6870,11 +6888,12 @@ union generic_reply
     struct suspend_process_reply suspend_process_reply;
     struct resume_process_reply resume_process_reply;
     struct get_system_info_reply get_system_info_reply;
+    struct create_esync_reply create_esync_reply;
 };
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 614
+#define SERVER_PROTOCOL_VERSION 615
 
 /* ### protocol_version end ### */
 
