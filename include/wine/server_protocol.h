@@ -5971,6 +5971,7 @@ enum esync_type
     ESYNC_SEMAPHORE = 1,
     ESYNC_AUTO_EVENT,
     ESYNC_MANUAL_EVENT,
+    ESYNC_MUTEX,
     ESYNC_MANUAL_SERVER,
     ESYNC_QUEUE,
 };
@@ -6918,7 +6919,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 617
+#define SERVER_PROTOCOL_VERSION 618
 
 /* ### protocol_version end ### */
 
