@@ -5992,6 +5992,7 @@ enum esync_type
     ESYNC_AUTO_EVENT,
     ESYNC_MANUAL_EVENT,
     ESYNC_MUTEX,
+    ESYNC_AUTO_SERVER,
     ESYNC_MANUAL_SERVER,
     ESYNC_QUEUE,
 };
@@ -6942,7 +6943,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 620
+#define SERVER_PROTOCOL_VERSION 621
 
 /* ### protocol_version end ### */
 
