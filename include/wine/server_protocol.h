@@ -5944,7 +5944,9 @@ struct create_esync_request
     unsigned int access;
     int          initval;
     int          type;
+    int          max;
     /* VARARG(objattr,object_attributes); */
+    char __pad_28[4];
 };
 struct create_esync_reply
 {
@@ -6959,7 +6961,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 625
+#define SERVER_PROTOCOL_VERSION 626
 
 /* ### protocol_version end ### */
 
