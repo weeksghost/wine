@@ -43,6 +43,7 @@ struct hid_device
 {
     WCHAR *path;
     HANDLE file;
+    HANDLE handle;
     RID_DEVICE_INFO_HID info;
     PHIDP_PREPARSED_DATA data;
 };
@@ -138,41 +139,63 @@ static struct hid_device *add_device(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *ifa
     device = &hid_devices[hid_devices_count++];
     device->path = path;
     device->file = file;
+    device->handle = INVALID_HANDLE_VALUE;
 
     return device;
 }
 
-static void find_hid_devices(void)
-{
-    static ULONGLONG last_check;
+extern DWORD WINAPI GetFinalPathNameByHandleW(HANDLE file, LPWSTR path, DWORD charcount, DWORD flags);
+static void find_hid_devices(BOOL);
 
+HANDLE rawinput_handle_from_device_handle(HANDLE device, BOOL rescan)
+{
+    WCHAR buffer[sizeof(OBJECT_NAME_INFORMATION) + MAX_PATH + 1];
+    OBJECT_NAME_INFORMATION *info = (OBJECT_NAME_INFORMATION*)&buffer;
+    ULONG dummy;
+    unsigned int i;
+
+    for (i = 0; i < hid_devices_count; ++i)
+    {
+        if (hid_devices[i].handle == device)
+            return &hid_devices[i];
+    }
+
+    if (NtQueryObject( device, ObjectNameInformation, &buffer, sizeof(buffer) - sizeof(WCHAR), &dummy ) || !info->Name.Buffer)
+        return NULL;
+
+    /* replace \??\ with \\?\ to match hid_devices paths */
+    if (info->Name.Length > 1 && info->Name.Buffer[0] == '\\' && info->Name.Buffer[1] == '?')
+        info->Name.Buffer[1] = '\\';
+
+    for (i = 0; i < hid_devices_count; ++i)
+    {
+        if (strcmpW(hid_devices[i].path, info->Name.Buffer) == 0)
+        {
+            hid_devices[i].handle = device;
+            return &hid_devices[i];
+        }
+    }
+
+    if (!rescan)
+        return NULL;
+
+    find_hid_devices(TRUE);
+
+    return rawinput_handle_from_device_handle(device, FALSE);
+}
+
+static void find_hid_devices_by_guid(const GUID *guid)
+{
     SP_DEVICE_INTERFACE_DATA iface = { sizeof(iface) };
     struct hid_device *device;
     HIDD_ATTRIBUTES attr;
     HIDP_CAPS caps;
-    GUID hid_guid;
     HDEVINFO set;
     DWORD idx;
 
-    if (GetTickCount64() - last_check < 2000)
-        return;
-    last_check = GetTickCount64();
+    set = SetupDiGetClassDevsW(guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
 
-    HidD_GetHidGuid(&hid_guid);
-
-    set = SetupDiGetClassDevsW(&hid_guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
-
-    EnterCriticalSection(&hid_devices_cs);
-
-    /* destroy previous list */
-    for (idx = 0; idx < hid_devices_count; ++idx)
-    {
-        CloseHandle(hid_devices[idx].file);
-        heap_free(hid_devices[idx].path);
-    }
-
-    hid_devices_count = 0;
-    for (idx = 0; SetupDiEnumDeviceInterfaces(set, NULL, &hid_guid, idx, &iface); ++idx)
+    for (idx = 0; SetupDiEnumDeviceInterfaces(set, NULL, guid, idx, &iface); ++idx)
     {
         if (!(device = add_device(set, &iface)))
             continue;
@@ -194,8 +217,47 @@ static void find_hid_devices(void)
         device->info.usUsage = caps.Usage;
     }
 
-    LeaveCriticalSection(&hid_devices_cs);
     SetupDiDestroyDeviceInfoList(set);
+}
+
+static void find_hid_devices(BOOL force)
+{
+    static ULONGLONG last_check;
+
+    DWORD idx;
+    GUID hid_guid;
+
+    if (!force && GetTickCount64() - last_check < 2000)
+        return;
+
+    HidD_GetHidGuid(&hid_guid);
+
+    EnterCriticalSection(&hid_devices_cs);
+
+    if (!force && GetTickCount64() - last_check < 2000)
+    {
+        LeaveCriticalSection(&hid_devices_cs);
+        return;
+    }
+
+    last_check = GetTickCount64();
+
+    /* destroy previous list */
+    for (idx = 0; idx < hid_devices_count; ++idx)
+    {
+        CloseHandle(hid_devices[idx].file);
+        heap_free(hid_devices[idx].path);
+    }
+
+    hid_devices_count = 0;
+
+    find_hid_devices_by_guid(&hid_guid);
+
+    /* HACK: also look up the xinput-specific devices */
+    hid_guid.Data4[7]++;
+    find_hid_devices_by_guid(&hid_guid);
+
+    LeaveCriticalSection(&hid_devices_cs);
 }
 
 /***********************************************************************
@@ -219,7 +281,7 @@ UINT WINAPI GetRawInputDeviceList(RAWINPUTDEVICELIST *devices, UINT *device_coun
         return ~0U;
     }
 
-    find_hid_devices();
+    find_hid_devices(FALSE);
 
     if (!devices)
     {
@@ -283,7 +345,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH RegisterRawInputDevices(RAWINPUTDEVICE *devices, U
         TRACE("device %u: page %#x, usage %#x, flags %#x, target %p.\n",
                 i, devices[i].usUsagePage, devices[i].usUsage,
                 devices[i].dwFlags, devices[i].hwndTarget);
-        if (devices[i].dwFlags & ~RIDEV_REMOVE)
+        if (devices[i].dwFlags & ~(RIDEV_REMOVE|RIDEV_NOLEGACY))
             FIXME("Unhandled flags %#x for device %u.\n", devices[i].dwFlags, i);
 
         d[i].usage_page = devices[i].usUsagePage;
@@ -415,6 +477,7 @@ UINT WINAPI GetRawInputDeviceInfoW(HANDLE device, UINT command, void *data, UINT
             device, command, data, data_size);
 
     if (!data_size) return ~0U;
+    if (!device) return ~0U;
 
     /* each case below must set:
      *     *data_size: length (meaning defined by command) of data we want to copy
@@ -501,14 +564,65 @@ UINT WINAPI GetRawInputDeviceInfoW(HANDLE device, UINT command, void *data, UINT
     return *data_size;
 }
 
+static int compare_raw_input_devices(const void *ap, const void *bp)
+{
+    const RAWINPUTDEVICE a = *(const RAWINPUTDEVICE *)ap;
+    const RAWINPUTDEVICE b = *(const RAWINPUTDEVICE *)bp;
+
+    if (a.usUsagePage != b.usUsagePage) return a.usUsagePage - b.usUsagePage;
+    if (a.usUsage != b.usUsage) return a.usUsage - b.usUsage;
+    return 0;
+}
+
 /***********************************************************************
  *              GetRegisteredRawInputDevices   (USER32.@)
  */
 UINT WINAPI DECLSPEC_HOTPATCH GetRegisteredRawInputDevices(RAWINPUTDEVICE *devices, UINT *device_count, UINT size)
 {
-    FIXME("devices %p, device_count %p, size %u stub!\n", devices, device_count, size);
+    struct rawinput_device *d = NULL;
+    unsigned int count = ~0U;
 
-    return 0;
+    TRACE("devices %p, device_count %p, size %u\n", devices, device_count, size);
+
+    if (!device_count)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return ~0U;
+    }
+
+    if (devices && !(d = HeapAlloc( GetProcessHeap(), 0, *device_count * sizeof(*d) )))
+        return ~0U;
+
+    SERVER_START_REQ( get_rawinput_devices )
+    {
+        if (d)
+            wine_server_set_reply( req, d, *device_count * sizeof(*d) );
+
+        if (wine_server_call( req ))
+            goto done;
+
+        if (!d || reply->device_count > *device_count)
+        {
+            *device_count = reply->device_count;
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            goto done;
+        }
+
+        for (count = 0; count < reply->device_count; ++count)
+        {
+            devices[count].usUsagePage = d[count].usage_page;
+            devices[count].usUsage = d[count].usage;
+            devices[count].dwFlags = d[count].flags;
+            devices[count].hwndTarget = wine_server_ptr_handle(d[count].target);
+        }
+    }
+    SERVER_END_REQ;
+
+    qsort(devices, count, sizeof(*devices), compare_raw_input_devices);
+
+done:
+    if (d) HeapFree( GetProcessHeap(), 0, d );
+    return count;
 }
 
 

@@ -792,7 +792,8 @@ static const struct column col_sounddevice[] =
 {
     { prop_nameW,        CIM_STRING },
     { prop_productnameW, CIM_STRING },
-    { prop_statusinfoW,  CIM_UINT16 }
+    { prop_statusinfoW,  CIM_UINT16 },
+    { prop_manufacturerW,       CIM_STRING }
 };
 static const struct column col_stdregprov[] =
 {
@@ -933,6 +934,10 @@ static const WCHAR quickfixengineering_captionW[] =
     {'h','t','t','p',':','/','/','w','i','n','e','h','q','.','o','r','g',0};
 static const WCHAR quickfixengineering_hotfixidW[] =
     {'K','B','1','2','3','4','5','6','7',0};
+static const WCHAR physicalmemory_partnumberW[] =
+    {'B','L','S','8','G','3','D','1','6','0','9','D','S','1','S','0','0','.',0};
+static const WCHAR sounddevice_manufacturerW[] =
+    {'T','h','e',' ','W','i','n','e',' ','P','r','o','j','e','c','t',0};
 static const WCHAR sounddevice_productnameW[] =
     {'W','i','n','e',' ','A','u','d','i','o',' ','D','e','v','i','c','e',0};
 static const WCHAR systemenclosure_systemenclosureW[] =
@@ -1272,6 +1277,7 @@ struct record_sounddevice
     const WCHAR *name;
     const WCHAR *productname;
     UINT16       statusinfo;
+    const WCHAR *manufacturer;
 };
 struct record_stdregprov
 {
@@ -1388,7 +1394,7 @@ static const struct record_quickfixengineering data_quickfixengineering[] =
 };
 static const struct record_sounddevice data_sounddevice[] =
 {
-    { sounddevice_productnameW, sounddevice_productnameW, 3 /* enabled */ }
+    { sounddevice_productnameW, sounddevice_productnameW, 3 /* enabled */, sounddevice_manufacturerW }
 };
 static const struct record_stdregprov data_stdregprov[] =
 {
@@ -3363,10 +3369,10 @@ static enum fill_status fill_physicalmemory( struct table *table, const struct e
 
     rec = (struct record_physicalmemory *)table->data;
     rec->capacity             = get_total_physical_memory();
-    rec->configuredclockspeed = 0;
+    rec->configuredclockspeed = 1600;
     rec->devicelocator        = dimm0W;
     rec->memorytype           = 9; /* RAM */
-    rec->partnumber           = NULL;
+    rec->partnumber           = physicalmemory_partnumberW;
     if (!match_row( table, row, cond, &status )) free_row_values( table, row );
     else row++;
 

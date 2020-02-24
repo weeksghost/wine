@@ -44,6 +44,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(win);
 #define NB_USER_HANDLES  ((LAST_USER_HANDLE - FIRST_USER_HANDLE + 1) >> 1)
 #define USER_HANDLE_TO_INDEX(hwnd) ((LOWORD(hwnd) - FIRST_USER_HANDLE) >> 1)
 
+extern HANDLE CDECL __wine_create_default_token(BOOL admin);
+
 static DWORD process_layout = ~0u;
 
 static struct list window_surfaces = LIST_INIT( window_surfaces );
@@ -2089,6 +2091,8 @@ HWND WINAPI GetDesktopWindow(void)
         WCHAR app[MAX_PATH + ARRAY_SIZE( explorer )];
         WCHAR cmdline[MAX_PATH + ARRAY_SIZE( explorer ) + ARRAY_SIZE( args )];
         WCHAR desktop[MAX_PATH];
+        char *ld_preload;
+        HANDLE token;
         void *redir;
 
         SERVER_START_REQ( set_user_object_info )
@@ -2121,9 +2125,18 @@ HWND WINAPI GetDesktopWindow(void)
         strcpyW( cmdline, app );
         strcatW( cmdline, args );
 
+        if (!(token = __wine_create_default_token( FALSE )))
+            ERR( "Failed to create limited token\n" );
+
+        /* HACK: Unset LD_PRELOAD before executing explorer.exe to disable buggy gameoverlayrenderer.so
+         * It's not going to work through the CreateProcessW env parameter, as it will not be used for the loader execv.
+         */
+        if ((ld_preload = getenv("LD_PRELOAD")))
+            unsetenv("LD_PRELOAD");
+
         Wow64DisableWow64FsRedirection( &redir );
-        if (CreateProcessW( app, cmdline, NULL, NULL, FALSE, DETACHED_PROCESS,
-                            NULL, windir, &si, &pi ))
+        if (CreateProcessAsUserW( token, app, cmdline, NULL, NULL, FALSE, DETACHED_PROCESS,
+                                  NULL, windir, &si, &pi ))
         {
             TRACE( "started explorer pid %04x tid %04x\n", pi.dwProcessId, pi.dwThreadId );
             WaitForInputIdle( pi.hProcess, 10000 );
@@ -2132,6 +2145,11 @@ HWND WINAPI GetDesktopWindow(void)
         }
         else WARN( "failed to start explorer, err %d\n", GetLastError() );
         Wow64RevertWow64FsRedirection( redir );
+
+        if (token) CloseHandle( token );
+
+        /* HACK: Restore the previous value, just in case */
+        if (ld_preload) setenv("LD_PRELOAD", ld_preload, 1);
 
         SERVER_START_REQ( get_desktop_window )
         {
@@ -2887,6 +2905,13 @@ INT WINAPI GetWindowTextA( HWND hwnd, LPSTR lpString, INT nMaxCount )
     return strlen(lpString);
 }
 
+/*******************************************************************
+ *		InternalGetWindowIcon (USER32.@)
+ */
+INT WINAPI InternalGetWindowIcon(HWND hwnd, UINT iconType )
+{
+    return NULL;
+}
 
 /*******************************************************************
  *		InternalGetWindowText (USER32.@)
@@ -3707,13 +3732,12 @@ BOOL WINAPI FlashWindowEx( PFLASHWINFO pfinfo )
         if (!wndPtr || wndPtr == WND_OTHER_PROCESS || wndPtr == WND_DESKTOP) return FALSE;
         hwnd = wndPtr->obj.handle;  /* make it a full handle */
 
-        if (pfinfo->dwFlags) wparam = !(wndPtr->flags & WIN_NCACTIVATED);
-        else wparam = (hwnd == GetForegroundWindow());
+        wparam = (wndPtr->flags & WIN_NCACTIVATED) != 0;
 
         WIN_ReleasePtr( wndPtr );
         SendMessageW( hwnd, WM_NCACTIVATE, wparam, 0 );
         USER_Driver->pFlashWindowEx( pfinfo );
-        return wparam;
+        return (pfinfo->dwFlags & FLASHW_CAPTION) ? TRUE : wparam;
     }
 }
 

@@ -118,6 +118,8 @@ static const struct object_ops named_pipe_ops =
     no_add_queue,                 /* add_queue */
     NULL,                         /* remove_queue */
     NULL,                         /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     NULL,                         /* satisfied */
     no_signal,                    /* signal */
     no_get_fd,                    /* get_fd */
@@ -160,6 +162,8 @@ static const struct object_ops pipe_server_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_fsync_idx,     /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     pipe_end_get_fd,              /* get_fd */
@@ -202,6 +206,8 @@ static const struct object_ops pipe_client_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    default_fd_get_esync_fd,      /* get_esync_fd */
+    default_fd_get_fsync_idx,     /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     pipe_end_get_fd,              /* get_fd */
@@ -248,6 +254,8 @@ static const struct object_ops named_pipe_device_ops =
     no_add_queue,                     /* add_queue */
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
+    NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     no_get_fd,                        /* get_fd */
@@ -277,6 +285,8 @@ static const struct object_ops named_pipe_device_file_ops =
     add_queue,                               /* add_queue */
     remove_queue,                            /* remove_queue */
     default_fd_signaled,                     /* signaled */
+    NULL,                                    /* get_esync_fd */
+    NULL,                                    /* get_fsync_idx */
     no_satisfied,                            /* satisfied */
     no_signal,                               /* signal */
     named_pipe_device_file_get_fd,           /* get_fd */
@@ -455,8 +465,7 @@ static void named_pipe_device_dump( struct object *obj, int verbose )
 
 static struct object_type *named_pipe_device_get_type( struct object *obj )
 {
-    static const WCHAR name[] = {'D','e','v','i','c','e'};
-    static const struct unicode_str str = { name, sizeof(name) };
+    const struct unicode_str str = { type_Device, sizeof(type_Device) };
     return get_object_type( &str );
 }
 
@@ -1186,7 +1195,7 @@ static struct pipe_server *create_pipe_server( struct named_pipe *pipe, unsigned
     server->pipe_end.server_pid = get_process_id( current->process );
     init_async_queue( &server->listen_q );
 
-    list_add_tail( &pipe->listeners, &server->entry );
+    list_add_head( &pipe->listeners, &server->entry );
     if (!(server->pipe_end.fd = alloc_pseudo_fd( &pipe_server_fd_ops, &server->pipe_end.obj, options )))
     {
         release_object( server );

@@ -59,6 +59,13 @@
 # include <mach/mach.h>
 #endif
 
+#if defined(HAVE_LINUX_FILTER_H) && defined(HAVE_LINUX_SECCOMP_H) && defined(HAVE_SYS_PRCTL_H)
+#define HAVE_SECCOMP 1
+# include <linux/filter.h>
+# include <linux/seccomp.h>
+# include <sys/prctl.h>
+#endif
+
 #define NONAMELESSUNION
 #define NONAMELESSSTRUCT
 #include "ntstatus.h"
@@ -355,6 +362,7 @@ static inline void set_sigcontext( const CONTEXT *context, ucontext_t *sigcontex
 #endif
 }
 
+extern void DECLSPEC_NORETURN __wine_syscall_dispatcher( void );
 
 /***********************************************************************
  * Definitions for Win32 unwind tables
@@ -1699,11 +1707,6 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
     context->SegFs  = FS_sig(sigcontext);
     context->SegGs  = GS_sig(sigcontext);
     context->EFlags = EFL_sig(sigcontext);
-#ifdef DS_sig
-    context->SegDs  = DS_sig(sigcontext);
-#else
-    __asm__("movw %%ds,%0" : "=m" (context->SegDs));
-#endif
 #ifdef ES_sig
     context->SegEs  = ES_sig(sigcontext);
 #else
@@ -1714,6 +1717,12 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
 #else
     __asm__("movw %%ss,%0" : "=m" (context->SegSs));
 #endif
+   /* Legends of Runeterra depends on having SegDs == SegSs in an exception
+    * handler. Testing shows that Windows returns fixed values from
+    * RtlCaptureContext() and NtGetContextThread() for at least %ds and %es,
+    * regardless of their actual values, and never sets them in
+    * NtSetContextThread(). */
+    context->SegDs  = context->SegSs;
     context->Dr0    = amd64_thread_data()->dr0;
     context->Dr1    = amd64_thread_data()->dr1;
     context->Dr2    = amd64_thread_data()->dr2;
@@ -2104,6 +2113,34 @@ NTSTATUS context_from_server( CONTEXT *to, const context_t *from )
     return STATUS_SUCCESS;
 }
 
+/*
+ * MH:W Iceborne patch
+ *
+ * Don't set debug registers, which requires an
+ * expensive call to wineserver
+ */
+
+#define MHW_STEAM_ID	"582010"
+#define MHW_CHECK_TODO	(-2)
+#define MHW_CHECK_YES	(1)
+#define MHW_CHECK_NO	(0)
+#define MHW_UNLIKELY(x)	__builtin_expect(!!(x),0)
+
+static int is_mhw_running(void) {
+	static int mhw_running_flag = MHW_CHECK_TODO;
+
+	/* don't care if we execute the below
+	 * spuriously */
+	if(MHW_UNLIKELY(mhw_running_flag == MHW_CHECK_TODO)) {
+		const char*	p_gameid = getenv("SteamGameId");
+		const int  	is_running = (!p_gameid || strcmp(p_gameid, MHW_STEAM_ID)) ? MHW_CHECK_NO : MHW_CHECK_YES;
+		/* atomic CAS */
+		__sync_bool_compare_and_swap(&mhw_running_flag, MHW_CHECK_TODO, is_running);
+	}
+
+	return mhw_running_flag == MHW_CHECK_YES;
+}
+
 
 /***********************************************************************
  *              NtSetContextThread  (NTDLL.@)
@@ -2115,13 +2152,15 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
     BOOL self = (handle == GetCurrentThread());
 
     /* debug registers require a server call */
-    if (self && (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)))
-        self = (amd64_thread_data()->dr0 == context->Dr0 &&
-                amd64_thread_data()->dr1 == context->Dr1 &&
-                amd64_thread_data()->dr2 == context->Dr2 &&
-                amd64_thread_data()->dr3 == context->Dr3 &&
-                amd64_thread_data()->dr6 == context->Dr6 &&
-                amd64_thread_data()->dr7 == context->Dr7);
+    if(!is_mhw_running()) {
+    	if (self && (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)))
+        	self = (amd64_thread_data()->dr0 == context->Dr0 &&
+                	amd64_thread_data()->dr1 == context->Dr1 &&
+                	amd64_thread_data()->dr2 == context->Dr2 &&
+                	amd64_thread_data()->dr3 == context->Dr3 &&
+                	amd64_thread_data()->dr6 == context->Dr6 &&
+                	amd64_thread_data()->dr7 == context->Dr7);
+    }
 
     if (!self)
     {
@@ -2149,7 +2188,18 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
     needed_flags = context->ContextFlags;
 
     /* debug registers require a server call */
-    if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) self = FALSE;
+    if(!is_mhw_running()) {
+    	if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) self = FALSE;
+    } else {
+	if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) {
+        	context->Dr0 = amd64_thread_data()->dr0;
+        	context->Dr1 = amd64_thread_data()->dr1;
+        	context->Dr2 = amd64_thread_data()->dr2;
+       		context->Dr3 = amd64_thread_data()->dr3;
+        	context->Dr6 = amd64_thread_data()->dr6;
+        	context->Dr7 = amd64_thread_data()->dr7;
+    	}
+    }
 
     if (!self)
     {
@@ -2431,12 +2481,21 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
     UNWIND_HISTORY_TABLE table;
     DISPATCHER_CONTEXT dispatch;
     CONTEXT context;
+    MEMORY_BASIC_INFORMATION wine_frame_stack_info, current_stack_info;
+    int is_teb_frame_in_current_stack = 1;
     NTSTATUS status;
 
     context = *orig_context;
     dispatch.TargetIp      = 0;
     dispatch.ContextRecord = &context;
     dispatch.HistoryTable  = &table;
+
+    if ( !(NtQueryVirtualMemory(NtCurrentProcess(), teb_frame, MemoryBasicInformation, &wine_frame_stack_info, sizeof(MEMORY_BASIC_INFORMATION), NULL)) &&
+         !(NtQueryVirtualMemory(NtCurrentProcess(), (PVOID)context.Rsp, MemoryBasicInformation, &current_stack_info, sizeof(MEMORY_BASIC_INFORMATION), NULL)))
+    {
+        is_teb_frame_in_current_stack = wine_frame_stack_info.AllocationBase == current_stack_info.AllocationBase;
+    }
+
     for (;;)
     {
         status = virtual_unwind( UNW_FLAG_EHANDLER, &dispatch, &context );
@@ -2482,7 +2541,7 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
             }
         }
         /* hack: call wine handlers registered in the tib list */
-        else while ((ULONG64)teb_frame < context.Rsp)
+        else if (is_teb_frame_in_current_stack) while ((ULONG64)teb_frame < context.Rsp)
         {
             TRACE( "found wine frame %p rsp %lx handler %p\n",
                     teb_frame, context.Rsp, teb_frame->Handler );
@@ -2519,6 +2578,7 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
     return STATUS_UNHANDLED_EXCEPTION;
 }
 
+NTSTATUS WINAPI __syscall_NtContinue( CONTEXT *context, BOOLEAN alert );
 
 static NTSTATUS raise_exception( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance )
 {
@@ -2581,7 +2641,7 @@ static NTSTATUS raise_exception( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL f
     }
 
 done:
-    return NtSetContextThread( GetCurrentThread(), context );
+    return __syscall_NtContinue( context, FALSE );
 }
 
 
@@ -3094,6 +3154,38 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *ucontext )
     restore_context( &context, ucontext );
 }
 
+extern unsigned int __wine_nb_syscalls;
+
+#ifdef HAVE_SECCOMP
+static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    unsigned int thunk_ret_offset;
+    ucontext_t *ctx = sigcontext;
+    unsigned int syscall_nr;
+    void ***rsp;
+
+    WARN("SIGSYS, rax %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX]);
+
+    syscall_nr = ctx->uc_mcontext.gregs[REG_RAX] - 0xf000;
+    if (syscall_nr >= __wine_nb_syscalls)
+    {
+        ERR("Syscall %u is undefined.\n", syscall_nr);
+        return;
+    }
+
+    rsp = (void ***)&ctx->uc_mcontext.gregs[REG_RSP];
+    *rsp -= 1;
+
+#ifdef __APPLE__
+    thunk_ret_offset = 0xb;
+#else
+    thunk_ret_offset = 0xc;
+#endif
+
+    **rsp = (void *)(ctx->uc_mcontext.gregs[REG_RIP] + thunk_ret_offset);
+    ctx->uc_mcontext.gregs[REG_RIP] = (ULONG64)__wine_syscall_dispatcher;
+}
+#endif
 
 /***********************************************************************
  *           __wine_set_signal_handler   (NTDLL.@)
@@ -3133,6 +3225,7 @@ NTSTATUS signal_alloc_thread( TEB **teb )
     {
         (*teb)->Tib.Self = &(*teb)->Tib;
         (*teb)->Tib.ExceptionList = (void *)~0UL;
+        (*teb)->WOW32Reserved = __wine_syscall_dispatcher;
     }
     return status;
 }
@@ -3263,6 +3356,49 @@ void signal_init_thread( TEB *teb )
 #endif
 }
 
+static void install_bpf(struct sigaction *sig_act)
+{
+#ifdef HAVE_SECCOMP
+    static struct sock_filter filter[] =
+    {
+       BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                (offsetof(struct seccomp_data, nr))),
+       BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0xf000, 0, 1),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog prog;
+
+    memset(&prog, 0, sizeof(prog));
+    prog.len = ARRAY_SIZE(filter);
+    prog.filter = filter;
+
+    if (prctl(PR_GET_SECCOMP, 0, NULL, 0, 0) != 2)
+    {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+        {
+            perror("prctl(PR_SET_NO_NEW_PRIVS, ...)");
+            exit(1);
+        }
+
+        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0))
+        {
+            perror("prctl(PR_SET_SECCOMP, ...)");
+            exit(1);
+        }
+    }
+    else
+    {
+        TRACE("Seccomp filters already installed.\n");
+    }
+
+    sig_act->sa_sigaction = sigsys_handler;
+    sigaction(SIGSYS, sig_act, NULL);
+#else
+    WARN("Built without seccomp.\n");
+#endif
+}
+
 /**********************************************************************
  *		signal_init_process
  */
@@ -3295,6 +3431,9 @@ void signal_init_process(void)
     sig_act.sa_sigaction = trap_handler;
     if (sigaction( SIGTRAP, &sig_act, NULL ) == -1) goto error;
 #endif
+
+    install_bpf(&sig_act);
+
     return;
 
  error:
@@ -3302,6 +3441,12 @@ void signal_init_process(void)
     exit(1);
 }
 
+/**********************************************************************
+ *    signal_init_early
+ */
+void signal_init_early(void)
+{
+}
 
 static ULONG64 get_int_reg( CONTEXT *context, int reg )
 {
