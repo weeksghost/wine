@@ -177,6 +177,7 @@ extern unsigned int DIR_get_drives_info( struct drive_info info[MAX_DOS_DRIVES] 
 extern NTSTATUS file_id_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, ANSI_STRING *unix_name_ret ) DECLSPEC_HIDDEN;
 extern NTSTATUS nt_to_unix_file_name_attr( const OBJECT_ATTRIBUTES *attr, ANSI_STRING *unix_name_ret,
                                            UINT disposition ) DECLSPEC_HIDDEN;
+extern RTL_CRITICAL_SECTION dir_section DECLSPEC_HIDDEN;
 
 /* virtual memory */
 extern NTSTATUS virtual_alloc_aligned( PVOID *ret, unsigned short zero_bits_64, SIZE_T *size_ptr,
