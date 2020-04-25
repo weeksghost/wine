@@ -1354,7 +1354,6 @@ enable_fwpuclnt
 enable_gameux
 enable_gdi32
 enable_gdiplus
-enable_gfesdk
 enable_glu32
 enable_gphoto2_ds
 enable_gpkcsp
@@ -21478,7 +21477,6 @@ wine_fn_config_makefile dlls/gdi32 enable_gdi32
 wine_fn_config_makefile dlls/gdi32/tests enable_tests
 wine_fn_config_makefile dlls/gdiplus enable_gdiplus
 wine_fn_config_makefile dlls/gdiplus/tests enable_tests
-wine_fn_config_makefile dlls/gfesdk enable_gfesdk
 wine_fn_config_makefile dlls/glu32 enable_glu32
 wine_fn_config_makefile dlls/gphoto2.ds enable_gphoto2_ds
 wine_fn_config_makefile dlls/gpkcsp enable_gpkcsp
