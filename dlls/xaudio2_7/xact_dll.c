@@ -1041,6 +1041,12 @@ static HRESULT WINAPI IXACT3EngineImpl_CreateSoundBank(IXACT3Engine *iface,
     ret = FACTAudioEngine_CreateSoundBank(This->fact_engine, pvBuffer, dwSize,
             dwFlags, dwAllocAttributes, &fsb);
     if (ret != 0) {
+        DWORD dwBytesWritten = 0;
+        HANDLE hfile = CreateFileA("c:\\CreateSoundBank.bin", GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+
+        WriteFile(hfile, pvBuffer, dwSize, &dwBytesWritten, NULL);
+
+        CloseHandle(hfile);
         ERR("Failed to CreateSoundBank: %d\n", ret);
         return E_FAIL;
     }
