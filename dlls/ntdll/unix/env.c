@@ -911,6 +911,8 @@ static void add_path_var( WCHAR *env, SIZE_T *pos, const char *name, const char 
 NTSTATUS CDECL get_dynamic_environment( WCHAR *env, SIZE_T *size )
 {
     const char *overrides = getenv( "WINEDLLOVERRIDES" );
+    const char *wineprefix = getenv( "WINEPREFIX" );
+    const char *pwd = getenv( "PWD" );
     SIZE_T alloc, pos = 0;
     WCHAR *buffer;
     DWORD i;
@@ -922,6 +924,8 @@ NTSTATUS CDECL get_dynamic_environment( WCHAR *env, SIZE_T *size )
     if (home_dir) alloc += strlen( home_dir ) + 9;
     if (build_dir) alloc += strlen( build_dir ) + 9;
     if (config_dir) alloc += strlen( config_dir ) + 9;
+    if (wineprefix) alloc += strlen( wineprefix );
+    if (pwd) alloc += strlen( pwd );
     if (user_name) alloc += strlen( user_name );
     if (overrides) alloc += strlen( overrides );
     for (i = 0; dll_paths[i]; i++) alloc += 20 + strlen( dll_paths[i] ) + 9;
@@ -941,6 +945,8 @@ NTSTATUS CDECL get_dynamic_environment( WCHAR *env, SIZE_T *size )
     append_envW( buffer, &pos, dlldir, NULL );
     append_envA( buffer, &pos, "WINEUSERNAME", user_name );
     append_envA( buffer, &pos, "WINEDLLOVERRIDES", overrides );
+    append_envA( buffer, &pos, "WINEPREFIX", wineprefix );
+    append_envA( buffer, &pos, "PWD", pwd );
     assert( pos <= alloc );
 
     if (pos < *size)
