@@ -128,6 +128,8 @@ static struct VkPhysicalDevice_T *wine_vk_physical_device_alloc(struct VkInstanc
         }
     }
 
+    num_properties += wine_vk_device_extension_faked_count();
+
     TRACE("Host supported extensions %u, Wine supported extensions %u\n", num_host_properties, num_properties);
 
     if (!(object->extensions = heap_calloc(num_properties, sizeof(*object->extensions))))
@@ -144,7 +146,22 @@ static struct VkPhysicalDevice_T *wine_vk_physical_device_alloc(struct VkInstanc
             j++;
         }
     }
-    object->extension_count = num_properties;
+
+    for (i = 0; i < wine_vk_device_extension_faked_count(); i++)
+    {
+        const VkExtensionProperties *e = wine_vk_device_extension_faked_idx(i);
+
+        if(!strcmp(e->extensionName, "VK_EXT_full_screen_exclusive") &&
+                (!vk_funcs->p_vkGetPhysicalDeviceSurfaceCapabilities2KHR ||
+                 !vk_funcs->p_vkGetPhysicalDeviceSurfaceFormats2KHR)){
+            /* ignore */
+        }else{
+            object->extensions[j] = *e;
+            j++;
+        }
+    }
+
+    object->extension_count = j;
 
     heap_free(host_properties);
     return object;
@@ -224,6 +241,8 @@ static void wine_vk_device_free_create_info(VkDeviceCreateInfo *create_info)
         heap_free((void *)group_info->pPhysicalDevices);
     }
 
+    heap_free((void *)create_info->ppEnabledExtensionNames);
+
     free_VkDeviceCreateInfo_struct_chain(create_info);
 }
 
@@ -233,6 +252,7 @@ static VkResult wine_vk_device_convert_create_info(const VkDeviceCreateInfo *src
     VkDeviceGroupDeviceCreateInfo *group_info;
     unsigned int i;
     VkResult res;
+    const char** extensions;
 
     *dst = *src;
 
@@ -257,6 +277,18 @@ static VkResult wine_vk_device_convert_create_info(const VkDeviceCreateInfo *src
             physical_devices[i] = group_info->pPhysicalDevices[i]->phys_dev;
         }
         group_info->pPhysicalDevices = physical_devices;
+    }
+
+    extensions = heap_alloc(sizeof(const char*) * src->enabledExtensionCount);
+    dst->ppEnabledExtensionNames = extensions;
+    dst->enabledExtensionCount = 0;
+    for (i = 0; i < src->enabledExtensionCount; i++) {
+        const char *extension_name = src->ppEnabledExtensionNames[i];
+
+        if (!wine_vk_device_extension_faked(extension_name)) {
+            extensions[dst->enabledExtensionCount] = extension_name;
+            dst->enabledExtensionCount++;
+        }
     }
 
     /* Should be filtered out by loader as ICDs don't support layers. */
@@ -306,7 +338,7 @@ static void wine_vk_device_free(struct VkDevice_T *device)
     heap_free(device);
 }
 
-static BOOL wine_vk_init(void)
+static BOOL WINAPI wine_vk_init(INIT_ONCE *once, void *param, void **context)
 {
     HDC hdc;
 
@@ -314,14 +346,18 @@ static BOOL wine_vk_init(void)
     vk_funcs = __wine_get_vulkan_driver(hdc, WINE_VULKAN_DRIVER_VERSION);
     ReleaseDC(0, hdc);
     if (!vk_funcs)
-    {
         ERR("Failed to load Wine graphics driver supporting Vulkan.\n");
-        return FALSE;
-    }
-
-    p_vkEnumerateInstanceVersion = vk_funcs->p_vkGetInstanceProcAddr(NULL, "vkEnumerateInstanceVersion");
+    else
+        p_vkEnumerateInstanceVersion = vk_funcs->p_vkGetInstanceProcAddr(NULL, "vkEnumerateInstanceVersion");
 
     return TRUE;
+}
+
+static void wine_vk_init_once(void)
+{
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+
+    InitOnceExecuteOnce(&init_once, wine_vk_init, NULL, NULL);
 }
 
 /* Helper function for converting between win32 and host compatible VkInstanceCreateInfo.
@@ -653,6 +689,10 @@ VkResult WINAPI wine_vkCreateInstance(const VkInstanceCreateInfo *create_info,
 
     TRACE("create_info %p, allocator %p, instance %p\n", create_info, allocator, instance);
 
+    wine_vk_init_once();
+    if (!vk_funcs)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
     if (allocator)
         FIXME("Support for allocation callbacks not implemented yet\n");
 
@@ -779,6 +819,10 @@ VkResult WINAPI wine_vkEnumerateInstanceExtensionProperties(const char *layer_na
         return VK_ERROR_LAYER_NOT_PRESENT;
     }
 
+    wine_vk_init_once();
+    if (!vk_funcs)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
     res = vk_funcs->p_vkEnumerateInstanceExtensionProperties(NULL, &num_host_properties, NULL);
     if (res != VK_SUCCESS)
         return res;
@@ -801,7 +845,14 @@ VkResult WINAPI wine_vkEnumerateInstanceExtensionProperties(const char *layer_na
     for (i = 0; i < num_host_properties; i++)
     {
         if (wine_vk_instance_extension_supported(host_properties[i].extensionName))
-            num_properties++;
+        {
+            if(!strcmp(host_properties[i].extensionName, "VK_KHR_get_physical_device_properties2") &&
+                    (!vk_funcs->p_vkGetPhysicalDeviceSurfaceCapabilities2KHR ||
+                     !vk_funcs->p_vkGetPhysicalDeviceSurfaceFormats2KHR)){
+                /* ignore - outdated vulkan loader */
+            }else
+                num_properties++;
+        }
         else
             TRACE("Instance extension '%s' is not supported.\n", host_properties[i].extensionName);
     }
@@ -818,8 +869,14 @@ VkResult WINAPI wine_vkEnumerateInstanceExtensionProperties(const char *layer_na
     {
         if (wine_vk_instance_extension_supported(host_properties[i].extensionName))
         {
-            TRACE("Enabling extension '%s'.\n", host_properties[i].extensionName);
-            properties[j++] = host_properties[i];
+            if(!strcmp(host_properties[i].extensionName, "VK_KHR_get_physical_device_properties2") &&
+                    (!vk_funcs->p_vkGetPhysicalDeviceSurfaceCapabilities2KHR ||
+                     !vk_funcs->p_vkGetPhysicalDeviceSurfaceFormats2KHR)){
+                /* ignore - outdated vulkan loader */
+            }else{
+                TRACE("Enabling extension '%s'.\n", host_properties[i].extensionName);
+                properties[j++] = host_properties[i];
+            }
         }
     }
     *count = min(*count, num_properties);
@@ -846,6 +903,8 @@ VkResult WINAPI wine_vkEnumerateInstanceVersion(uint32_t *version)
     VkResult res;
 
     TRACE("%p\n", version);
+
+    wine_vk_init_once();
 
     if (p_vkEnumerateInstanceVersion)
     {
@@ -1026,6 +1085,59 @@ VkResult WINAPI wine_vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *supporte
     TRACE("Loader requested ICD version %u, returning %u\n", req_version, *supported_version);
 
     return VK_SUCCESS;
+}
+
+/* VK_EXT_full_screen_exclusive */
+
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfacePresentModes2EXT(
+    VkPhysicalDevice                            physicalDevice,
+    const VkPhysicalDeviceSurfaceInfo2KHR*      pSurfaceInfo,
+    uint32_t*                                   pPresentModeCount,
+    VkPresentModeKHR*                           pPresentModes)
+{
+    TRACE("%p, %p, %p, %p", physicalDevice, pSurfaceInfo, pPresentModeCount, pPresentModes);
+    return thunk_vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, pSurfaceInfo->surface, pPresentModeCount, pPresentModes);
+}
+
+VkResult WINAPI wine_vkGetDeviceGroupSurfacePresentModes2EXT(
+    VkDevice                                    device,
+    const VkPhysicalDeviceSurfaceInfo2KHR*      pSurfaceInfo,
+    VkDeviceGroupPresentModeFlagsKHR*           pModes)
+{
+    TRACE("%p, %p, %p", device, pSurfaceInfo, pModes);
+    return thunk_vkGetDeviceGroupSurfacePresentModesKHR(device, pSurfaceInfo->surface, pModes);
+}
+
+VkResult WINAPI wine_vkAcquireFullScreenExclusiveModeEXT(
+    VkDevice                                    device,
+    VkSwapchainKHR                              swapchain)
+{
+    /* don't care */
+    TRACE("%p, %s", device, wine_dbgstr_longlong(swapchain));
+
+    return VK_SUCCESS;
+}
+
+VkResult WINAPI wine_vkReleaseFullScreenExclusiveModeEXT(
+    VkDevice                                    device,
+    VkSwapchainKHR                              swapchain)
+{
+    /* don't care */
+    TRACE("%p, %s", device, wine_dbgstr_longlong(swapchain));
+
+    return VK_SUCCESS;
+}
+
+/* extra crap we moved to private thunks */
+
+VkResult WINAPI wine_vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR *pModes)
+{
+    return thunk_vkGetDeviceGroupSurfacePresentModesKHR(device, surface, pModes);
+}
+
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t *pPresentModeCount, VkPresentModeKHR *pPresentModes)
+{
+    return thunk_vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, pPresentModeCount, pPresentModes);
 }
 
 VkResult WINAPI wine_vkQueueSubmit(VkQueue queue, uint32_t count,
@@ -1358,6 +1470,25 @@ void WINAPI wine_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(VkPhysicalDev
     properties->externalSemaphoreFeatures = 0;
 }
 
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice phys_dev,
+        VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR *capabilities)
+{
+    VkResult res;
+
+    TRACE("%p, 0x%s, %p\n", phys_dev, wine_dbgstr_longlong(surface), capabilities);
+
+    res = thunk_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_dev, surface, capabilities);
+
+    /* HACK: It happened more than once that a Windows game didn't expect that maxImageCount can be
+     * set to 0. A value of 0 means that there is no limit on the number of images. */
+    if (res == VK_SUCCESS && capabilities->minImageCount && !capabilities->maxImageCount)
+    {
+        capabilities->maxImageCount = 16;
+    }
+
+    return res;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)
 {
     TRACE("%p, %u, %p\n", hinst, reason, reserved);
@@ -1367,13 +1498,14 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)
         case DLL_PROCESS_ATTACH:
             hinstance = hinst;
             DisableThreadLibraryCalls(hinst);
-            return wine_vk_init();
+            break;
     }
     return TRUE;
 }
 
 static const struct vulkan_func vk_global_dispatch_table[] =
 {
+    /* These functions must call wine_vk_init_once() before accessing vk_funcs. */
     {"vkCreateInstance", &wine_vkCreateInstance},
     {"vkEnumerateInstanceExtensionProperties", &wine_vkEnumerateInstanceExtensionProperties},
     {"vkEnumerateInstanceLayerProperties", &wine_vkEnumerateInstanceLayerProperties},

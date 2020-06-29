@@ -314,10 +314,10 @@ struct unix_funcs
     NTSTATUS      (CDECL *virtual_alloc_thread_stack)( INITIAL_TEB *stack, SIZE_T reserve_size, SIZE_T commit_size, SIZE_T *pthread_size );
     ssize_t       (CDECL *virtual_locked_recvmsg)( int fd, struct msghdr *hdr, int flags );
     void          (CDECL *virtual_release_address_space)(void);
-    void          (CDECL *virtual_set_large_address_space)(void);
+    void          (CDECL *virtual_set_large_address_space)(BOOL force);
 
     /* thread/process functions */
-    TEB *         (CDECL *init_threading)( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size );
+    TEB *         (CDECL *init_threading)( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size, void *syscall_handler, unsigned int syscall_count );
     void          (CDECL *exit_thread)( int status );
     void          (CDECL *exit_process)( int status );
     NTSTATUS      (CDECL *exec_process)( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status );
@@ -325,6 +325,7 @@ struct unix_funcs
     /* server functions */
     unsigned int  (CDECL *server_call)( void *req_ptr );
     void          (CDECL *server_send_fd)( int fd );
+    void          (CDECL *server_remove_fds_from_cache_by_type)( enum server_fd_type type );
     NTSTATUS      (CDECL *server_fd_to_handle)( int fd, unsigned int access, unsigned int attributes,
                                                 HANDLE *handle );
     NTSTATUS      (CDECL *server_handle_to_fd)( HANDLE handle, unsigned int access, int *unix_fd,
@@ -334,7 +335,7 @@ struct unix_funcs
 
     /* file functions */
     NTSTATUS      (CDECL *nt_to_unix_file_name)( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
-                                                 UINT disposition, BOOLEAN check_case );
+                                                 UINT disposition );
     NTSTATUS      (CDECL *unix_to_nt_file_name)( const ANSI_STRING *name, UNICODE_STRING *nt );
     void          (CDECL *set_show_dot_files)( BOOL enable );
 

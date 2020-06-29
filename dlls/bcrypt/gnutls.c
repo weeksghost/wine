@@ -297,8 +297,11 @@ BOOL gnutls_initialize(void)
     }
     if (!(pgnutls_decode_rs_value = dlsym( libgnutls_handle, "gnutls_decode_rs_value" )))
     {
-        WARN("gnutls_decode_rs_value not found\n");
-        pgnutls_decode_rs_value = compat_gnutls_decode_rs_value;
+        if (!(pgnutls_decode_rs_value = dlsym( libgnutls_handle, "_gnutls_decode_ber_rs_raw" )))
+        {
+            WARN("gnutls_decode_rs_value and legacy alternative _gnutls_decode_ber_rs_raw not found\n");
+            pgnutls_decode_rs_value = compat_gnutls_decode_rs_value;
+        }
     }
 
     if (TRACE_ON( bcrypt ))
@@ -1585,4 +1588,13 @@ NTSTATUS key_destroy( struct key *key )
     heap_free( key );
     return STATUS_SUCCESS;
 }
+
+#ifndef SONAME_LIBGCRYPT
+NTSTATUS compute_secret_ecc (struct key *pubkey_in, struct key *privkey_in, struct secret *secret)
+{
+    ERR("support for secrets not available without gcrypt\n");
+    return STATUS_NOT_IMPLEMENTED;
+}
+#endif
+
 #endif

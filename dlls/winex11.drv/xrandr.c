@@ -550,11 +550,22 @@ static int xrandr12_init_modes(void)
                                             xrandr12_get_current_mode,
                                             xrandr12_set_current_mode,
                                             output_info->nmode, 1 );
+    
+    int limit = 53; // required by nier_automata (55), sekiro (53), dark_souls3 (53)
+    int capped_resources_nmode = resources->nmode;
+    const char *sgi = getenv("SteamGameId");
+
+    if (sgi && (!strcmp(sgi, "374320") | !strcmp(sgi, "524220") | !strcmp(sgi, "814380")))
+    {
+        if (resources->nmode > limit) {
+            capped_resources_nmode = limit;
+        }
+    }
 
     xrandr_mode_count = 0;
     for (i = 0; i < output_info->nmode; ++i)
     {
-        for (j = 0; j < resources->nmode; ++j)
+        for (j = 0; j < capped_resources_nmode; ++j)
         {
             XRRModeInfo *mode = &resources->modes[j];
 

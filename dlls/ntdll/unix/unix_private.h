@@ -56,6 +56,7 @@ struct ntdll_thread_data
     int                wait_fd[2];    /* fd for sleeping server requests */
     BOOL               wow64_redir;   /* Wow64 filesystem redirection flag */
     pthread_t          pthread_id;    /* pthread thread id */
+    void              *pthread_stack; /* pthread stack */
     struct list        entry;         /* entry in TEB list */
 };
 
@@ -107,16 +108,17 @@ extern NTSTATUS CDECL virtual_map_section( HANDLE handle, PVOID *addr_ptr, unsig
 extern NTSTATUS CDECL virtual_alloc_thread_stack( INITIAL_TEB *stack, SIZE_T reserve_size, SIZE_T commit_size, SIZE_T *pthread_size ) DECLSPEC_HIDDEN;
 extern ssize_t CDECL virtual_locked_recvmsg( int fd, struct msghdr *hdr, int flags ) DECLSPEC_HIDDEN;
 extern void CDECL virtual_release_address_space(void) DECLSPEC_HIDDEN;
-extern void CDECL virtual_set_large_address_space(void) DECLSPEC_HIDDEN;
+extern void CDECL virtual_set_large_address_space(BOOL force) DECLSPEC_HIDDEN;
 
 extern void CDECL server_send_fd( int fd ) DECLSPEC_HIDDEN;
+extern void CDECL server_remove_fds_from_cache_by_type( enum server_fd_type type ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL server_fd_to_handle( int fd, unsigned int access, unsigned int attributes,
                                            HANDLE *handle ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL server_handle_to_fd( HANDLE handle, unsigned int access, int *unix_fd,
                                            unsigned int *options ) DECLSPEC_HIDDEN;
 extern void CDECL server_release_fd( HANDLE handle, int unix_fd ) DECLSPEC_HIDDEN;
 extern void CDECL server_init_process_done( void *relay ) DECLSPEC_HIDDEN;
-extern TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size ) DECLSPEC_HIDDEN;
+extern TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size, void *syscall_handler, unsigned int syscall_count ) DECLSPEC_HIDDEN;
 extern void CDECL DECLSPEC_NORETURN exit_thread( int status ) DECLSPEC_HIDDEN;
 extern void CDECL DECLSPEC_NORETURN exit_process( int status ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status ) DECLSPEC_HIDDEN;
@@ -124,7 +126,7 @@ extern NTSTATUS CDECL unwind_builtin_dll( ULONG type, struct _DISPATCHER_CONTEXT
                                           CONTEXT *context ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS CDECL nt_to_unix_file_name( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
-                                            UINT disposition, BOOLEAN check_case ) DECLSPEC_HIDDEN;
+                                            UINT disposition ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL unix_to_nt_file_name( const ANSI_STRING *name, UNICODE_STRING *nt ) DECLSPEC_HIDDEN;
 extern void CDECL set_show_dot_files( BOOL enable ) DECLSPEC_HIDDEN;
 
@@ -157,6 +159,9 @@ extern NTSTATUS exec_wineloader( char **argv, int socketfd, int is_child_64bit,
                                  ULONGLONG res_start, ULONGLONG res_end ) DECLSPEC_HIDDEN;
 extern void start_server( BOOL debug ) DECLSPEC_HIDDEN;
 extern ULONG_PTR get_image_address(void) DECLSPEC_HIDDEN;
+
+extern unsigned int __wine_nb_syscalls DECLSPEC_HIDDEN;
+extern void *__wine_syscall_dispatcher DECLSPEC_HIDDEN;
 
 extern unsigned int server_call_unlocked( void *req_ptr ) DECLSPEC_HIDDEN;
 extern void server_enter_uninterrupted_section( RTL_CRITICAL_SECTION *cs, sigset_t *sigset ) DECLSPEC_HIDDEN;
@@ -193,7 +198,7 @@ extern TEB *virtual_alloc_first_teb(void) DECLSPEC_HIDDEN;
 extern NTSTATUS virtual_alloc_teb( TEB **ret_teb ) DECLSPEC_HIDDEN;
 extern void virtual_free_teb( TEB *teb ) DECLSPEC_HIDDEN;
 extern NTSTATUS virtual_clear_tls_index( ULONG index ) DECLSPEC_HIDDEN;
-extern void virtual_map_user_shared_data(void) DECLSPEC_HIDDEN;
+extern void virtual_map_user_shared_data( void *syscall_handler ) DECLSPEC_HIDDEN;
 extern NTSTATUS virtual_handle_fault( LPCVOID addr, DWORD err, BOOL on_signal_stack ) DECLSPEC_HIDDEN;
 extern unsigned int virtual_locked_server_call( void *req_ptr ) DECLSPEC_HIDDEN;
 extern ssize_t virtual_locked_read( int fd, void *addr, size_t size ) DECLSPEC_HIDDEN;
@@ -214,6 +219,7 @@ extern NTSTATUS signal_alloc_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_free_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_process(void) DECLSPEC_HIDDEN;
+extern void signal_init_early(void) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg,
                                                    BOOL suspend, void *relay, TEB *teb ) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_exit_thread( int status, void (*func)(int) ) DECLSPEC_HIDDEN;

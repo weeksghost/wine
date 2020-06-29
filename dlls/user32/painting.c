@@ -725,7 +725,20 @@ static BOOL send_erase( HWND hwnd, UINT flags, HRGN client_rgn,
             {
                 /* don't erase if the clip box is empty */
                 if (type != NULLREGION)
+                {
+                    WND *wnd_ptr;
+
                     need_erase = !SendMessageW( hwnd, WM_ERASEBKGND, (WPARAM)hdc, 0 );
+                    if ((wnd_ptr = WIN_GetPtr( hwnd )) && wnd_ptr != WND_OTHER_PROCESS && wnd_ptr != WND_DESKTOP)
+                    {
+                        if (need_erase)
+                            wnd_ptr->flags |= WIN_PS_NEED_ERASE_BKGND;
+                        else
+                            wnd_ptr->flags &= ~WIN_PS_NEED_ERASE_BKGND;
+
+                        WIN_ReleasePtr( wnd_ptr );
+                    }
+                }
             }
             if (!hdc_ret) release_dc( hwnd, hdc, TRUE );
         }
@@ -943,6 +956,7 @@ HDC WINAPI BeginPaint( HWND hwnd, PAINTSTRUCT *lps )
     BOOL erase;
     RECT rect;
     UINT flags = UPDATE_NONCLIENT | UPDATE_ERASE | UPDATE_PAINT | UPDATE_INTERNALPAINT | UPDATE_NOCHILDREN;
+    WND *wnd_ptr;
 
     HideCaret( hwnd );
 
@@ -957,7 +971,17 @@ HDC WINAPI BeginPaint( HWND hwnd, PAINTSTRUCT *lps )
         release_dc( hwnd, hdc, TRUE );
         return 0;
     }
-    lps->fErase = erase;
+
+    if (!(wnd_ptr = WIN_GetPtr( hwnd )) || wnd_ptr == WND_OTHER_PROCESS || wnd_ptr == WND_DESKTOP)
+    {
+        lps->fErase = erase;
+    }
+    else
+    {
+        lps->fErase = !!(wnd_ptr->flags & WIN_PS_NEED_ERASE_BKGND);
+        WIN_ReleasePtr( wnd_ptr );
+    }
+
     lps->rcPaint = rect;
     lps->hdc = hdc;
     return hdc;
@@ -1484,10 +1508,10 @@ static INT scroll_window( HWND hwnd, INT dx, INT dy, const RECT *rect, const REC
     rdw_flags = (flags & SW_ERASE) && (flags & SW_INVALIDATE) ?
                                 RDW_INVALIDATE | RDW_ERASE  : RDW_INVALIDATE ;
 
-    if (!WIN_IsWindowDrawable( hwnd, TRUE )) return ERROR;
     hwnd = WIN_GetFullHandle( hwnd );
 
-    GetClientRect(hwnd, &rc);
+    if (!WIN_IsWindowDrawable( hwnd, TRUE )) SetRectEmpty(&rc);
+    else GetClientRect(hwnd, &rc);
 
     if (clipRect) IntersectRect(&cliprc,&rc,clipRect);
     else cliprc = rc;

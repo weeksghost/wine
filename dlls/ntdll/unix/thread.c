@@ -29,6 +29,9 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
+#ifdef HAVE_PRCTL
+#include <sys/prctl.h>
+#endif
 #include <pthread.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -58,6 +61,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(seh);
 #define PTHREAD_STACK_MIN 16384
 #endif
 
+unsigned int __wine_nb_syscalls;
+void *__wine_syscall_dispatcher;
+
 static int *nb_threads;
 
 static inline int get_unix_exit_code( NTSTATUS status )
@@ -84,7 +90,7 @@ static void pthread_exit_wrapper( int status )
 /***********************************************************************
  *           init_threading
  */
-TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size )
+TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size, void *syscall_handler, unsigned int syscall_count )
 {
     TEB *teb;
     BOOL suspend;
@@ -94,8 +100,11 @@ TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZ
     *ldt_copy = &__wine_ldt_copy;
 #endif
     nb_threads = nb_threads_ptr;
+    __wine_nb_syscalls = syscall_count;
+    __wine_syscall_dispatcher = syscall_handler;
 
     teb = virtual_alloc_first_teb();
+    teb->WOW32Reserved = syscall_handler;
 
     signal_init_threading();
     signal_alloc_thread( teb );
@@ -103,7 +112,7 @@ TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZ
     dbg_init();
     server_init_process();
     info_size = server_init_thread( teb->Peb, &suspend );
-    virtual_map_user_shared_data();
+    virtual_map_user_shared_data( syscall_handler );
     virtual_create_builtin_view( ntdll_module );
     init_cpu_info();
     init_files();
@@ -337,6 +346,7 @@ void abort_process( int status )
 void CDECL exit_thread( int status )
 {
     static void *prev_teb;
+    sigset_t sigset;
     TEB *teb;
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
@@ -351,6 +361,12 @@ void CDECL exit_thread( int status )
             virtual_free_teb( teb );
         }
     }
+
+    sigemptyset( &sigset );
+    sigaddset( &sigset, SIGQUIT );
+    pthread_sigmask( SIG_BLOCK, &sigset, NULL );
+    if (!InterlockedDecrement( nb_threads )) _exit( status );
+
     signal_exit_thread( status, pthread_exit_wrapper );
 }
 
@@ -379,7 +395,15 @@ void wait_suspend( CONTEXT *context )
     errno = saved_errno;
 }
 
-
+/* "How to: Set a Thread Name in Native Code"
+ * https://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx */
+typedef struct tagTHREADNAME_INFO
+{
+   DWORD   dwType;     /* Must be 0x1000 */
+   LPCSTR  szName;     /* Pointer to name - limited to 9 bytes (8 characters + terminator) */
+   DWORD   dwThreadID; /* Thread ID (-1 = caller thread) */
+   DWORD   dwFlags;    /* Reserved for future use.  Must be zero. */
+} THREADNAME_INFO;
 /**********************************************************************
  *           send_debug_event
  *
@@ -401,6 +425,21 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
 
     for (i = 0; i < min( rec->NumberParameters, EXCEPTION_MAXIMUM_PARAMETERS ); i++)
         params[i] = rec->ExceptionInformation[i];
+    
+    if (rec->ExceptionCode == 0x406d1388)
+    {
+        const THREADNAME_INFO *threadname = (const THREADNAME_INFO *)rec->ExceptionInformation;
+
+        if (threadname->dwThreadID == -1)
+        {
+#ifdef HAVE_PRCTL
+#ifndef PR_SET_NAME
+# define PR_SET_NAME 15
+#endif
+            prctl( PR_SET_NAME, threadname->szName );
+#endif
+        }
+    }
 
     SERVER_START_REQ( queue_exception_event )
     {

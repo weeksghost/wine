@@ -923,7 +923,7 @@ static NTSTATUS CDECL load_so_dll( UNICODE_STRING *nt_name, void **module )
     NTSTATUS status;
     DWORD len;
 
-    if (nt_to_unix_file_name( nt_name, &unix_name, FILE_OPEN, FALSE )) return STATUS_DLL_NOT_FOUND;
+    if (nt_to_unix_file_name( nt_name, &unix_name, FILE_OPEN )) return STATUS_DLL_NOT_FOUND;
 
     /* remove .so extension from Windows name */
     len = nt_name->Length / sizeof(WCHAR);
@@ -1508,6 +1508,7 @@ static struct unix_funcs unix_funcs =
     exec_process,
     wine_server_call,
     server_send_fd,
+    server_remove_fds_from_cache_by_type,
     server_fd_to_handle,
     server_handle_to_fd,
     server_release_fd,
@@ -1780,6 +1781,7 @@ void __wine_main( int argc, char *argv[], char *envp[] )
 #endif
 
     virtual_init();
+    signal_init_early();
 
     ntdll_module = load_ntdll();
     fixup_ntdll_imports( &__wine_spec_nt_header );

@@ -208,7 +208,7 @@
 # @ stub NtEnumerateSystemEnvironmentValuesEx
 @ stdcall NtEnumerateValueKey(long long long ptr long ptr)
 @ stub NtExtendSection
-# @ stub NtFilterToken
+@ stdcall NtFilterToken(long long ptr ptr ptr ptr)
 @ stdcall NtFindAtom(ptr long ptr)
 @ stdcall NtFlushBuffersFile(long ptr)
 @ stdcall NtFlushInstructionCache(long ptr long)
@@ -885,6 +885,7 @@
 @ stub RtlQueryPropertyNames
 @ stub RtlQueryPropertySet
 @ stdcall RtlQueryRegistryValues(long ptr ptr ptr ptr)
+@ stdcall RtlQueryRegistryValuesEx(long ptr ptr ptr ptr)
 @ stub RtlQuerySecurityObject
 @ stub RtlQueryTagHeap
 @ stdcall RtlQueryTimeZoneInformation(ptr)
@@ -1112,6 +1113,7 @@
 @ stdcall WinSqmIsOptedIn()
 @ stdcall WinSqmSetDWORD(ptr long long)
 @ stdcall WinSqmStartSession(ptr long long)
+@ extern Wow64Transition
 @ stdcall -private ZwAcceptConnectPort(ptr long ptr long ptr ptr) NtAcceptConnectPort
 @ stdcall -private ZwAccessCheck(ptr long long ptr ptr ptr ptr ptr) NtAccessCheck
 @ stdcall -private ZwAccessCheckAndAuditAlarm(ptr long ptr ptr ptr long ptr long ptr ptr ptr) NtAccessCheckAndAuditAlarm
@@ -1577,6 +1579,7 @@
 
 # Server interface
 @ cdecl -norelay wine_server_call(ptr)
+@ cdecl wine_server_close_fds_by_type(long)
 @ cdecl wine_server_fd_to_handle(long long long ptr)
 @ cdecl wine_server_handle_to_fd(long long ptr ptr)
 @ cdecl wine_server_release_fd(long long)
@@ -1593,6 +1596,10 @@
 
 # Virtual memory
 @ cdecl __wine_locked_recvmsg(long ptr long)
+@ cdecl __wine_needs_override_large_address_aware()
+
+# Token
+@ cdecl __wine_create_default_token(long)
 
 # Version
 @ cdecl wine_get_version() NTDLL_wine_get_version
@@ -1602,6 +1609,8 @@
 # Codepages
 @ cdecl __wine_get_unix_codepage()
 
+@ cdecl IsTransgaming()
+
 # Filesystem
-@ cdecl wine_nt_to_unix_file_name(ptr ptr long long)
+@ cdecl wine_nt_to_unix_file_name(ptr ptr long)
 @ cdecl wine_unix_to_nt_file_name(ptr ptr)
