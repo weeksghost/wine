@@ -175,24 +175,29 @@ static BOOL CALLBACK init_gstreamer_proc(INIT_ONCE *once, void *param, void **ct
     char **argv = args;
     int argc = 2;
     GError *err = NULL;
-    const char *e;
+    const char *r = getenv("WINEPREFIX");
+    const char *l = getenv("PWD");
 
     TRACE("Initializing...\n");
 
-    if ((e = getenv("WINE_GST_REGISTRY_DIR")))
-    {
-        char gst_reg[PATH_MAX];
+    char gst_reg[PATH_MAX];
+    char gst_lib[PATH_MAX];
 #if defined(__x86_64__)
-        const char *arch = "/registry.x86_64.bin";
+    const char *reg = "/gstreamer-1.0/registry.x86_64.bin";
+    const char *lib = "/../lib64/gstreamer-1.0/";
 #elif defined(__i386__)
-        const char *arch = "/registry.i386.bin";
+    const char *reg = "/gstreamer-1.0/registry.i386.bin";
+    const char *lib = "/../lib/gstreamer-1.0/";
 #else
 #error Bad arch
 #endif
-        strcpy(gst_reg, e);
-        strcat(gst_reg, arch);
-        setenv("GST_REGISTRY_1_0", gst_reg, 1);
-    }
+    strcpy(gst_reg, r);
+    strcat(gst_reg, reg);
+    setenv("GST_REGISTRY_1_0", gst_reg, 1);
+    
+    strcpy(gst_reg, l);
+    strcat(gst_lib, lib);
+    setenv("GST_PLUGIN_SYSTEM_PATH_1_0", gst_lib, 1);
 
     argv[0] = argv0;
     argv[1] = argv1;
