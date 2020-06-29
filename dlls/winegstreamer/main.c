@@ -195,7 +195,7 @@ static BOOL CALLBACK init_gstreamer_proc(INIT_ONCE *once, void *param, void **ct
     strcat(gst_reg, reg);
     setenv("GST_REGISTRY_1_0", gst_reg, 1);
     
-    strcpy(gst_reg, l);
+    strcpy(gst_lib, l);
     strcat(gst_lib, lib);
     setenv("GST_PLUGIN_SYSTEM_PATH_1_0", gst_lib, 1);
 
