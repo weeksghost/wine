@@ -311,6 +311,26 @@ void WINAPI KeClearEvent( PRKEVENT event )
     KeResetEvent( event );
 }
 
+LONG WINAPI KeReadStateEvent( PRKEVENT event )
+{
+    HANDLE handle;
+
+    TRACE("event %p.\n", event);
+
+    if (event->Header.WaitListHead.Blink == INVALID_HANDLE_VALUE)
+    {
+        if (!(ObOpenObjectByPointer( event, OBJ_KERNEL_HANDLE, NULL, EVENT_QUERY_STATE, NULL, KernelMode, &handle )))
+        {
+            EVENT_BASIC_INFORMATION event_info;
+            if (!(NtQueryEvent( handle, EventBasicInformation, &event_info, sizeof(event_info), NULL)))
+                event->Header.SignalState = event_info.EventState;
+            NtClose( handle );
+        }
+    }
+    TRACE("->%d\n", event->Header.SignalState);
+    return event->Header.SignalState;
+}
+
 /***********************************************************************
  *           KeInitializeSemaphore   (NTOSKRNL.EXE.@)
  */
