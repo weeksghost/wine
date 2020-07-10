@@ -802,6 +802,18 @@ BOOLEAN WINAPI KeInsertQueueApc(PRKAPC apc, PVOID sysarg1, PVOID sysarg2, KPRIOR
     return TRUE;
 }
 
+BOOLEAN KeTestAlertThread(KPROCESSOR_MODE mode)
+{
+    FIXME("stub! %u\n", mode);
+    return TRUE;
+}
+
+BOOLEAN KeAlertThread(PKTHREAD thread, KPROCESSOR_MODE mode)
+{
+    FIXME("stub! %p mode %u\n", thread, mode);
+    return TRUE;
+}
+
 static KSPIN_LOCK cancel_lock;
 
 /***********************************************************************
