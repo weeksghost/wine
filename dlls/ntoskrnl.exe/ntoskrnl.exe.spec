@@ -574,7 +574,7 @@
 @ stub KeInsertDeviceQueue
 @ stub KeInsertHeadQueue
 @ stdcall KeInsertQueue(ptr ptr)
-@ stub KeInsertQueueApc
+@ stdcall KeInsertQueueApc(ptr ptr ptr long)
 @ stub KeInsertQueueDpc
 @ stub KeIsAttachedProcess
 @ stub KeIsExecutingDpc
