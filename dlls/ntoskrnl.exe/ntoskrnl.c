@@ -2244,12 +2244,31 @@ NTSTATUS WINAPI FsRtlRegisterUncProvider(PHANDLE MupHandle, PUNICODE_STRING Redi
 static void *create_process_object( HANDLE handle )
 {
     PEPROCESS process;
+    NTSTATUS stat;
 
     if (!(process = alloc_kernel_object( PsProcessType, handle, sizeof(*process), 0 ))) return NULL;
 
     process->header.Type = 3;
     process->header.WaitListHead.Blink = INVALID_HANDLE_VALUE; /* mark as kernel object */
     NtQueryInformationProcess( handle, ProcessBasicInformation, &process->info, sizeof(process->info), NULL );
+
+    SERVER_START_REQ(get_dll_info)
+    {
+        req->handle = wine_server_obj_handle(handle);
+        req->base_address = 0;
+        if (((stat = wine_server_call(req)) == STATUS_BUFFER_TOO_SMALL) || stat == STATUS_SUCCESS)
+        {
+            process->section_base_address = (PVOID) reply->base_address;
+            filename_len = reply->filename_len;
+        }
+        else
+        {
+            ERR("Failed to get base address stat %x\n", stat);
+            process->section_base_address = (PVOID) 0;
+        }
+    }
+    SERVER_END_REQ;
+
     return process;
 }
 
@@ -2952,6 +2971,12 @@ HANDLE WINAPI PsGetCurrentThreadId(void)
 BOOLEAN WINAPI PsIsSystemThread(PETHREAD thread)
 {
     return thread->kthread.process == PsInitialSystemProcess;
+}
+
+PVOID PsGetProcessSectionBaseAddress(PEPROCESS process)
+{
+    TRACE("(%p)->%p\n", process, process->section_base_address);
+    return process->section_base_address;
 }
 
 

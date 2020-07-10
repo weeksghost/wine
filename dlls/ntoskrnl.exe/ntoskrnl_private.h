@@ -40,6 +40,7 @@ struct _EPROCESS
 {
     DISPATCHER_HEADER header;
     PROCESS_BASIC_INFORMATION info;
+    PVOID section_base_address;
 };
 
 struct _KTHREAD
