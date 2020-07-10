@@ -40,6 +40,8 @@ struct _EPROCESS
 {
     DISPATCHER_HEADER header;
     PROCESS_BASIC_INFORMATION info;
+    /* TODO: we should store a section object here instead */
+    PFILE_OBJECT file_object;
     PVOID section_base_address;
 };
 
