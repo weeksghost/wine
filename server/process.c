@@ -1164,6 +1164,11 @@ void replace_process_token( struct process *process, struct token *new_token )
     grab_object(new_token);
 }
 
+int is_process( struct object *obj )
+{
+    return obj->ops == &process_ops;
+}
+
 /* create a new process */
 DECL_HANDLER(new_process)
 {
