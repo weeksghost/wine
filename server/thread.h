@@ -94,6 +94,7 @@ struct thread
     data_size_t            desc_len;      /* thread description length in bytes */
     WCHAR                 *desc;          /* thread description string */
     struct timeout_user   *exit_poll;     /* poll if the thread/process has exited already */
+    struct object         *callback_init_event;
     int                    shm_fd;        /* file descriptor for thread local shared memory */
     shmlocal_t            *shm;           /* thread local shared memory pointer */
 };

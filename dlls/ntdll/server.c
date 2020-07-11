@@ -1672,6 +1672,7 @@ size_t server_init_thread( void *entry_point, BOOL *suspend )
     int reply_pipe[2];
     struct sigaction sig_act;
     size_t info_size;
+    HANDLE processed_event;
 
     sig_act.sa_handler = SIG_IGN;
     sig_act.sa_flags   = 0;
@@ -1705,8 +1706,16 @@ size_t server_init_thread( void *entry_point, BOOL *suspend )
         server_start_time = reply->server_start;
         server_cpus       = reply->all_cpus;
         *suspend          = reply->suspend;
+        processed_event   = reply->processed_event;
     }
     SERVER_END_REQ;
+
+    if (processed_event)
+    {
+        NtWaitForSingleObject(processed_event, FALSE, NULL);
+        ERR("waited for thread start\n");
+        NtClose(processed_event);
+    }
 
     /* initialize thread shared memory pointers */
     NtCurrentTeb()->Reserved5[1] = server_get_shared_memory( 0 );
