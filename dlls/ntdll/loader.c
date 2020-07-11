@@ -1971,6 +1971,7 @@ static void load_builtin_callback( void *module, const char *filename )
     WINE_MODREF *wm;
     UNICODE_STRING nt_name;
     const WCHAR *load_path;
+    HANDLE processed_event;
 
     if (!module)
     {
@@ -2038,8 +2039,15 @@ static void load_builtin_callback( void *module, const char *filename )
         req->name       = wine_server_client_ptr( &wm->ldr.FullDllName.Buffer );
         wine_server_add_data( req, wm->ldr.FullDllName.Buffer, wm->ldr.FullDllName.Length );
         wine_server_call( req );
+        processed_event = wine_server_ptr_handle(reply->processed_event);
     }
     SERVER_END_REQ;
+
+    if (processed_event)
+    {
+        NtWaitForSingleObject(processed_event, FALSE, NULL);
+        NtClose(processed_event);
+    }
 
     /* setup relay debugging entry points */
 #ifdef __aarch64__
@@ -2514,6 +2522,7 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
     WINE_MODREF *wm;
     NTSTATUS status;
     const char *dll_type = (image_info->image_flags & IMAGE_FLAGS_WineBuiltin) ? "PE builtin" : "native";
+    HANDLE processed_event;
 
     TRACE("Trying %s dll %s\n", dll_type, debugstr_us(nt_name) );
 
@@ -2572,8 +2581,16 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
         req->name       = wine_server_client_ptr( &wm->ldr.FullDllName.Buffer );
         wine_server_add_data( req, wm->ldr.FullDllName.Buffer, wm->ldr.FullDllName.Length );
         wine_server_call( req );
+        processed_event = wine_server_ptr_handle(reply->processed_event);
     }
     SERVER_END_REQ;
+
+    if (processed_event)
+    {
+        LARGE_INTEGER dont_wait;
+        NtWaitForSingleObject(processed_event, FALSE, NULL);
+        NtClose(processed_event);
+    }
 
     if (image_info->image_flags & IMAGE_FLAGS_WineBuiltin)
     {
