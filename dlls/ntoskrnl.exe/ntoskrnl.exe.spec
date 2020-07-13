@@ -410,7 +410,7 @@
 @ stub IoGetRequestorProcessId
 @ stub IoGetRequestorSessionId
 @ stdcall IoGetStackLimits(ptr ptr)
-@ stub IoGetTopLevelIrp
+@ stdcall IoGetTopLevelIrp()
 @ stdcall IoInitializeIrp(ptr long long)
 @ stdcall IoInitializeRemoveLockEx(ptr long long long long)
 @ stdcall IoInitializeTimer(ptr ptr ptr)
