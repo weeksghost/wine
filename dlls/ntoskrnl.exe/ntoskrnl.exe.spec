@@ -697,7 +697,7 @@
 @ stdcall MmGetSystemRoutineAddress(ptr)
 @ stub MmGetVirtualForPhysical
 @ stub MmGrowKernelStack
-@ stub MmHighestUserAddress
+@ extern MmHighestUserAddress
 @ stdcall MmIsAddressValid(ptr)
 @ stub MmIsDriverVerifying
 @ stub MmIsNonPagedSystemAddressValid
@@ -733,7 +733,7 @@
 @ stub MmSetAddressRangeModified
 @ stub MmSetBankedSection
 @ stub MmSizeOfMdl
-@ stub MmSystemRangeStart
+@ extern MmSystemRangeStart
 @ stub MmTrimAllSystemPagableMemory
 @ stdcall MmUnlockPagableImageSection(ptr)
 @ stdcall MmUnlockPages(ptr)
@@ -745,7 +745,7 @@
 @ stub MmUnmapViewInSystemSpace
 @ stub MmUnmapViewOfSection
 @ stub MmUnsecureVirtualMemory
-@ stub MmUserProbeAddress
+@ extern MmUserProbeAddress
 @ extern NlsAnsiCodePage ntdll.NlsAnsiCodePage
 @ stub NlsLeadByteInfo
 @ extern NlsMbCodePageTag ntdll.NlsMbCodePageTag
