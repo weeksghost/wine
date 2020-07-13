@@ -414,6 +414,24 @@ int wait_select_reply( void *cookie )
 }
 
 
+#ifdef __x86_64__
+__ASM_GLOBAL_FUNC( KiUserApcDispatcher,
+                   "movq 0x0(%rsp),%rcx\n\t" /* P1Home/NormalContext */
+                   "movq 0x8(%rsp),%rdx\n\t" /* P2Home/SysArg1 */
+                   "movq 0x10(%rsp),%r8\n\t" /* P3Home/SysArg2 */
+                   "leaq (%rsp),%r9\n\t" /* &context->r9 */
+                   "callq *0x18(%rsp)\n\t" /* call P4Home/NormalRoutine */
+                   "leaq (%rsp),%rcx\n\t"
+                   "movb $0x1,%dl\n\t"
+                   "call " __ASM_NAME("NtContinue") "\n\t"
+                   "nop\n\t"
+                   "int3"
+                   //"ret"
+                   )
+#else
+PVOID KiUserApcDispatcher;
+#endif
+
 /***********************************************************************
  *              invoke_apc
  *
