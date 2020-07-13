@@ -3095,7 +3095,8 @@ NTSTATUS WINAPI NtQuerySystemInformation(
                         shi->Handle[i].HandleValue  = info[i].handle;
                         shi->Handle[i].AccessMask   = info[i].access;
                         shi->Handle[i].ObjectType   = translate_object_index(info[i].type);
-                        /* FIXME: Fill out HandleFlags, ObjectPointer */
+                        shi->Handle[i].ObjectPointer = wine_server_get_ptr(info[i].object);
+                        /* FIXME: Fill out HandleFlags */
                     }
                 }
                 else if (ret == STATUS_BUFFER_TOO_SMALL)

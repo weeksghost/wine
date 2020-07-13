@@ -3619,6 +3619,7 @@ struct handle_info
     obj_handle_t handle;
     unsigned int access;
     unsigned int type;
+    client_ptr_t object;
 };
 
 /* Return a list of all opened handles */
