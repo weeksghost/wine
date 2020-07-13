@@ -4596,7 +4596,11 @@ void __wine_process_init(void)
     if (!(status = load_dll( params->DllPath.Buffer, params->ImagePathName.Buffer, NULL,
                              DONT_RESOLVE_DLL_REFERENCES, &wm )))
     {
+        IMAGE_NT_HEADERS *exe_header = RtlImageNtHeader(wm->ldr.BaseAddress);
         peb->ImageBaseAddress = wm->ldr.BaseAddress;
+        peb->ImageSubSystem = exe_header->OptionalHeader.Subsystem;
+        peb->ImageSubSystemMajorVersion = exe_header->OptionalHeader.MajorSubsystemVersion;
+        peb->ImageSubSystemMinorVersion = exe_header->OptionalHeader.MinorSubsystemVersion;
         TRACE( "main exe loaded %s at %p\n", debugstr_us(&params->ImagePathName), peb->ImageBaseAddress );
         if (wm->ldr.Flags & LDR_IMAGE_IS_DLL)
         {
