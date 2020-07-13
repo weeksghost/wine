@@ -4545,3 +4545,49 @@ BOOLEAN WINAPI RtlIsNtDdiVersionAvailable(ULONG version)
     FIXME("stub: %d\n", version);
     return FALSE;
 }
+
+void WINAPI KeStackAttachProcess(PEPROCESS process, PKAPC_STATE state)
+{
+    PKTHREAD thread = KeGetCurrentThread();
+    NTSTATUS stat;
+
+    TRACE("%p %p\n", process, state);
+
+    state->Process = thread->process;
+    thread->process = process;
+
+    SERVER_START_REQ(attach_process)
+    {
+        req->manager = wine_server_obj_handle(get_device_manager());
+        req->detach = 0;
+        req->process = wine_server_client_ptr(process);
+        stat = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+
+    if (stat)
+        ERR("%x\n", stat);
+}
+
+void WINAPI KeUnstackDetachProcess(PKAPC_STATE state)
+{
+    PKTHREAD thread = KeGetCurrentThread();
+    NTSTATUS stat;
+
+    TRACE("%p\n", state);
+
+    thread->process = state->Process;
+
+    SERVER_START_REQ(attach_process)
+    {
+        req->manager = wine_server_obj_handle(get_device_manager());
+        req->detach = 1;
+        req->process = wine_server_client_ptr(state->Process);
+        stat = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+
+    if (stat)
+        ERR("%x\n", stat);
+}
+
