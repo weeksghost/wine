@@ -11,6 +11,7 @@ C_SRCS = \
 	instr.c \
 	ntoskrnl.c \
 	pnp.c \
-	sync.c
+	sync.c \
+	virtual.c
 
 RC_SRCS = ntoskrnl.rc

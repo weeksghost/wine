@@ -793,6 +793,7 @@
 @ stub NtQueryQuotaInformationFile
 @ stdcall NtQuerySecurityObject(long long ptr long ptr)
 @ stdcall NtQuerySystemInformation(long ptr long ptr)
+@ stdcall NtQueryVirtualMemory(long ptr long ptr long ptr)
 @ stdcall NtQueryVolumeInformationFile(long ptr ptr long long)
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr)
 @ stub NtRequestPort
@@ -1371,6 +1372,7 @@
 @ stdcall -private ZwOpenThreadTokenEx(long long long long ptr) NtOpenThreadTokenEx
 @ stdcall -private ZwOpenTimer(ptr long ptr) NtOpenTimer
 @ stdcall -private ZwPowerInformation(long ptr long ptr long) NtPowerInformation
+@ stdcall -private ZwProtectVirtualMemory(long ptr ptr long ptr)
 @ stdcall -private ZwPulseEvent(long ptr) NtPulseEvent
 @ stub ZwQueryBootEntryOrder
 @ stub ZwQueryBootOptions
@@ -1393,6 +1395,7 @@
 @ stdcall -private ZwQuerySymbolicLinkObject(long ptr ptr) NtQuerySymbolicLinkObject
 @ stdcall -private ZwQuerySystemInformation(long ptr long ptr) NtQuerySystemInformation
 @ stdcall -private ZwQueryValueKey(long ptr long ptr long ptr) NtQueryValueKey
+@ stdcall -private ZwQueryVirtualMemory(long ptr long ptr long ptr) NtQueryVirtualMemory
 @ stdcall -private ZwQueryVolumeInformationFile(long ptr ptr long long) NtQueryVolumeInformationFile
 @ stdcall -private ZwReadFile(long long ptr ptr ptr ptr long ptr ptr) NtReadFile
 @ stdcall -private ZwReplaceKey(ptr long ptr) NtReplaceKey
