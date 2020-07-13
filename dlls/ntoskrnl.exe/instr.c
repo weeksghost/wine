@@ -787,13 +787,12 @@ static DWORD emulate_instruction( EXCEPTION_RECORD *rec, CONTEXT *context )
             BYTE *data = INSTR_GetOperandAddr( context, instr + 2, prefixlen + 2, long_addr,
                                                rex, segprefix, &len );
             unsigned int data_size = (instr[1] == 0xb7) ? 2 : 1;
-            SIZE_T offset = data - user_shared_data;
+            BYTE temp[8] = {0};
 
-            if (offset <= sizeof(KSHARED_USER_DATA) - data_size)
+
+            if (read_emulated_memory(temp, data, data_size))
             {
-                ULONGLONG temp = 0;
-                memcpy( &temp, __wine_user_shared_data() + offset, data_size );
-                store_reg_word( context, instr[2], (BYTE *)&temp, long_op, rex );
+                store_reg_word( context, instr[2], temp, long_op, rex );
                 context->Rip += prefixlen + len + 2;
                 return ExceptionContinueExecution;
             }
