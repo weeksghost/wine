@@ -814,7 +814,7 @@
 @ stub ObAssignSecurity
 @ stub ObCheckCreateObjectAccess
 @ stub ObCheckObjectAccess
-@ stub ObCloseHandle
+@ stdcall ObCloseHandle(ptr long)
 @ stub ObCreateObject
 @ stub ObCreateObjectType
 @ stdcall ObDereferenceObject(ptr)
