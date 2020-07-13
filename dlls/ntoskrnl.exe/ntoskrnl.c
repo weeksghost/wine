@@ -4569,6 +4569,8 @@ static NTSTATUS WINAPI init_driver( DRIVER_OBJECT *driver_object, UNICODE_STRING
         return STATUS_DLL_INIT_FAILED;
 
     driver_object->DriverSection = find_ldr_module( module );
+    driver_object->DriverStart = ((LDR_MODULE *)driver_object->DriverSection)->BaseAddress;
+    driver_object->DriverSize = ((LDR_MODULE *)driver_object->DriverSection)->SizeOfImage;
 
     nt = RtlImageNtHeader( module );
     if (!nt->OptionalHeader.AddressOfEntryPoint) return STATUS_SUCCESS;
