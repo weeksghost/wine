@@ -973,6 +973,7 @@ typedef enum _SYSTEM_INFORMATION_CLASS {
     SystemMemoryListInformation = 80,
     SystemFileCacheInformationEx = 81,
     SystemBootEnvironmentInformation = 90,
+    SystemCodeIntegrityInformation = 103,
     SystemLogicalProcessorInformationEx = 107,
     SystemInformationClassMax
 } SYSTEM_INFORMATION_CLASS, *PSYSTEM_INFORMATION_CLASS;
@@ -1696,6 +1697,14 @@ typedef struct _SYSTEM_BOOT_ENVIRONMENT_INFORMATION
     FIRMWARE_TYPE FirmwareType;
     ULONGLONG BootFlags;
 } SYSTEM_BOOT_ENVIRONMENT_INFORMATION, *PSYSTEM_BOOT_ENVIRONMENT_INFORMATION;
+
+/* System Information Class 0x67 */
+
+typedef struct _SYSTEM_CODEINTEGRITY_INFORMATION
+{
+    ULONG Length;
+    ULONG CodeIntegrityOptions;
+} SYSTEM_CODEINTEGRITY_INFORMATION, *PSYSTEM_CODEINTEGRITY_INFORMATION;
 
 typedef struct _TIME_FIELDS
 {   CSHORT Year;
