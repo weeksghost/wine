@@ -3302,26 +3302,71 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR path_name, DWORD flags,
 NTSTATUS WINAPI LdrGetDllHandle( LPCWSTR load_path, ULONG flags, const UNICODE_STRING *name, HMODULE *base )
 {
     NTSTATUS status;
-    UNICODE_STRING nt_name;
-    WINE_MODREF *wm;
-    void *module;
-    pe_image_info_t image_info;
-    struct stat st;
+    PLIST_ENTRY entry, mark;
+    int name_len = name->Length / sizeof(WCHAR);
+    BOOL opt = name->Length >= 8 && name->Buffer[name_len - 4] == '.';
+
+    if (opt)
+    {
+        PWCHAR p;
+        for (p = name->Buffer; p < name->Buffer + name->Length / sizeof(WCHAR); p++)
+        {
+            if (*p == '\\')
+            {
+                opt = FALSE;
+                break;
+            }
+        }
+    }
 
     RtlEnterCriticalSection( &loader_section );
 
     if (!load_path) load_path = NtCurrentTeb()->Peb->ProcessParameters->DllPath.Buffer;
 
-    status = find_dll_file( load_path, name->Buffer, dllW, &nt_name, &wm, &module, &image_info, &st );
+    status = STATUS_DLL_NOT_FOUND;
 
-    if (wm) *base = wm->ldr.BaseAddress;
-    else
+    mark = opt ?
+        &hash_table[hash_basename(name->Buffer)] :
+        &NtCurrentTeb()->Peb->LdrData->InMemoryOrderModuleList;
+    for (entry = mark->Flink; entry != mark; entry = entry->Flink)
     {
-        if (status == STATUS_SUCCESS) NtUnmapViewOfSection( NtCurrentProcess(), module );
-        status = STATUS_DLL_NOT_FOUND;
-    }
-    RtlFreeUnicodeString( &nt_name );
+        LDR_MODULE *mod = opt ?
+            CONTAINING_RECORD(entry, LDR_MODULE, HashLinks) :
+            CONTAINING_RECORD(entry, LDR_MODULE, InMemoryOrderModuleList);
+        if (name->Length > mod->FullDllName.Length)
+            continue;
+        if (!(RtlCompareUnicodeStrings( name->Buffer, name_len, mod->FullDllName.Buffer, name_len, TRUE )))
+        {
+            *base = mod->BaseAddress;
+            status = STATUS_SUCCESS;
+            goto done;
+        }
+        if (name->Length > mod->BaseDllName.Length)
+            continue;
+        if (!(RtlCompareUnicodeStrings( name->Buffer, name_len, mod->BaseDllName.Buffer, name_len, TRUE )))
+        {
+            LPCWSTR current_path = load_path;
+            int path_len;
+            /* compare load path */
+            for (current_path = load_path; *current_path != 0; current_path += path_len)
+            {
+                path_len = wcschr(current_path, ';') - current_path;
+                if (path_len < 0)
+                    path_len = wcslen(current_path);
 
+                if (path_len > mod->FullDllName.Length)
+                    continue;
+                if (!(wcsncmp(current_path, mod->FullDllName.Buffer, path_len)))
+                {
+                    *base = mod->BaseAddress;
+                    status = STATUS_SUCCESS;
+                    goto done;
+                }
+            }
+        }
+    }
+
+    done:
     RtlLeaveCriticalSection( &loader_section );
     TRACE( "%s -> %p (load path %s)\n", debugstr_us(name), status ? NULL : *base, debugstr_w(load_path) );
     return status;
