@@ -2571,6 +2571,8 @@ static void *create_process_object( HANDLE handle )
         lstrcpynA(process->image_file_name, image_name, 15);
     }
 
+    process->handle_table = (PVOID)(ULONG_PTR)0xdeadbeef;
+
     return process;
 }
 
@@ -4862,3 +4864,8 @@ void WINAPI KeUnstackDetachProcess(PKAPC_STATE state)
         ERR("%x\n", stat);
 }
 
+BOOLEAN WINAPI ExEnumHandleTable(PVOID handle_table, PVOID handle_proc, PVOID param, PHANDLE last_handle)
+{
+    FIXME("stub! (%p %p %p %p)\n", handle_table, handle_proc, param, last_handle);
+    return FALSE;
+}
