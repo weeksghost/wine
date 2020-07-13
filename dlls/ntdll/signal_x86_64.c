@@ -24,6 +24,7 @@
 #include "wine/port.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -57,6 +58,13 @@
 #endif
 #ifdef __APPLE__
 # include <mach/mach.h>
+#endif
+
+#if defined(HAVE_LINUX_FILTER_H) && defined(HAVE_LINUX_SECCOMP_H) && defined(HAVE_SYS_PRCTL_H)
+#define HAVE_SECCOMP 1
+# include <linux/filter.h>
+# include <linux/seccomp.h>
+# include <sys/prctl.h>
 #endif
 
 #define NONAMELESSUNION
@@ -354,6 +362,7 @@ static inline void set_sigcontext( const CONTEXT *context, ucontext_t *sigcontex
 #endif
 }
 
+extern void DECLSPEC_NORETURN __wine_syscall_dispatcher( void );
 
 /***********************************************************************
  * Definitions for Win32 unwind tables
@@ -1698,11 +1707,6 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
     context->SegFs  = FS_sig(sigcontext);
     context->SegGs  = GS_sig(sigcontext);
     context->EFlags = EFL_sig(sigcontext);
-#ifdef DS_sig
-    context->SegDs  = DS_sig(sigcontext);
-#else
-    __asm__("movw %%ds,%0" : "=m" (context->SegDs));
-#endif
 #ifdef ES_sig
     context->SegEs  = ES_sig(sigcontext);
 #else
@@ -1713,6 +1717,12 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
 #else
     __asm__("movw %%ss,%0" : "=m" (context->SegSs));
 #endif
+   /* Legends of Runeterra depends on having SegDs == SegSs in an exception
+    * handler. Testing shows that Windows returns fixed values from
+    * RtlCaptureContext() and NtGetContextThread() for at least %ds and %es,
+    * regardless of their actual values, and never sets them in
+    * NtSetContextThread(). */
+    context->SegDs  = context->SegSs;
     context->Dr0    = amd64_thread_data()->dr0;
     context->Dr1    = amd64_thread_data()->dr1;
     context->Dr2    = amd64_thread_data()->dr2;
@@ -2114,13 +2124,13 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
     BOOL self = (handle == GetCurrentThread());
 
     /* debug registers require a server call */
-    if (self && (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)))
+    /*if (self && (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)))
         self = (amd64_thread_data()->dr0 == context->Dr0 &&
                 amd64_thread_data()->dr1 == context->Dr1 &&
                 amd64_thread_data()->dr2 == context->Dr2 &&
                 amd64_thread_data()->dr3 == context->Dr3 &&
                 amd64_thread_data()->dr6 == context->Dr6 &&
-                amd64_thread_data()->dr7 == context->Dr7);
+                amd64_thread_data()->dr7 == context->Dr7);*/
 
     if (!self)
     {
@@ -2148,7 +2158,15 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
     needed_flags = context->ContextFlags;
 
     /* debug registers require a server call */
-    if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) self = FALSE;
+    if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) //self = FALSE;
+    {
+        context->Dr0 = amd64_thread_data()->dr0;
+        context->Dr1 = amd64_thread_data()->dr1;
+        context->Dr2 = amd64_thread_data()->dr2;
+        context->Dr3 = amd64_thread_data()->dr3;
+        context->Dr6 = amd64_thread_data()->dr6;
+        context->Dr7 = amd64_thread_data()->dr7;
+    }
 
     if (!self)
     {
@@ -2430,12 +2448,21 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
     UNWIND_HISTORY_TABLE table;
     DISPATCHER_CONTEXT dispatch;
     CONTEXT context;
+    MEMORY_BASIC_INFORMATION wine_frame_stack_info, current_stack_info;
+    int is_teb_frame_in_current_stack = 1;
     NTSTATUS status;
 
     context = *orig_context;
     dispatch.TargetIp      = 0;
     dispatch.ContextRecord = &context;
     dispatch.HistoryTable  = &table;
+
+    if ( !(NtQueryVirtualMemory(NtCurrentProcess(), teb_frame, MemoryBasicInformation, &wine_frame_stack_info, sizeof(MEMORY_BASIC_INFORMATION), NULL)) &&
+         !(NtQueryVirtualMemory(NtCurrentProcess(), (PVOID)context.Rsp, MemoryBasicInformation, &current_stack_info, sizeof(MEMORY_BASIC_INFORMATION), NULL)))
+    {
+        is_teb_frame_in_current_stack = wine_frame_stack_info.AllocationBase == current_stack_info.AllocationBase;
+    }
+
     for (;;)
     {
         status = virtual_unwind( UNW_FLAG_EHANDLER, &dispatch, &context );
@@ -2481,7 +2508,7 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
             }
         }
         /* hack: call wine handlers registered in the tib list */
-        else while ((ULONG64)teb_frame < context.Rsp)
+        else if (is_teb_frame_in_current_stack) while ((ULONG64)teb_frame < context.Rsp)
         {
             TRACE( "found wine frame %p rsp %lx handler %p\n",
                     teb_frame, context.Rsp, teb_frame->Handler );
@@ -2518,6 +2545,7 @@ static NTSTATUS call_stack_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_contex
     return STATUS_UNHANDLED_EXCEPTION;
 }
 
+NTSTATUS WINAPI __syscall_NtContinue( CONTEXT *context, BOOLEAN alert );
 
 static NTSTATUS raise_exception( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance )
 {
@@ -2580,7 +2608,7 @@ static NTSTATUS raise_exception( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL f
     }
 
 done:
-    return NtSetContextThread( GetCurrentThread(), context );
+    return __syscall_NtContinue( context, FALSE );
 }
 
 
@@ -2871,6 +2899,29 @@ static inline BOOL handle_interrupt( ucontext_t *sigcontext, struct stack_layout
 
 
 /**********************************************************************
+ *    segv_handler_early
+ *
+ * Handler for SIGSEGV and related errors. Used only during the initialization
+ * of the process to handle virtual faults.
+ */
+static void segv_handler_early( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    ucontext_t *ucontext = sigcontext;
+
+    switch(TRAP_sig(ucontext))
+    {
+    case TRAP_x86_PAGEFLT:  /* Page fault */
+        if (!virtual_handle_fault( siginfo->si_addr, (ERROR_sig(ucontext) >> 1) & 0x09, TRUE ))
+            return;
+        /* fall-through */
+    default:
+        WINE_ERR( "Got unexpected trap %lld during process initialization\n", TRAP_sig(ucontext) );
+        abort_thread(1);
+        break;
+    }
+}
+
+/**********************************************************************
  *		segv_handler
  *
  * Handler for SIGSEGV and related errors.
@@ -3093,6 +3144,38 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *ucontext )
     restore_context( &context, ucontext );
 }
 
+extern unsigned int __wine_nb_syscalls;
+
+#ifdef HAVE_SECCOMP
+static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    unsigned int thunk_ret_offset;
+    ucontext_t *ctx = sigcontext;
+    unsigned int syscall_nr;
+    void ***rsp;
+
+    WARN("SIGSYS, rax %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX]);
+
+    syscall_nr = ctx->uc_mcontext.gregs[REG_RAX] - 0xf000;
+    if (syscall_nr >= __wine_nb_syscalls)
+    {
+        ERR("Syscall %u is undefined.\n", syscall_nr);
+        return;
+    }
+
+    rsp = (void ***)&ctx->uc_mcontext.gregs[REG_RSP];
+    *rsp -= 1;
+
+#ifdef __APPLE__
+    thunk_ret_offset = 0xb;
+#else
+    thunk_ret_offset = 0xc;
+#endif
+
+    **rsp = (void *)(ctx->uc_mcontext.gregs[REG_RIP] + thunk_ret_offset);
+    ctx->uc_mcontext.gregs[REG_RIP] = (ULONG64)__wine_syscall_dispatcher;
+}
+#endif
 
 /***********************************************************************
  *           __wine_set_signal_handler   (NTDLL.@)
@@ -3119,6 +3202,7 @@ void signal_init_threading(void)
  */
 NTSTATUS signal_alloc_thread( TEB *teb )
 {
+    teb->WOW32Reserved = __wine_syscall_dispatcher;
     return STATUS_SUCCESS;
 }
 
@@ -3245,6 +3329,82 @@ void signal_init_thread( TEB *teb )
 #endif
 }
 
+#ifdef HAVE_SECCOMP
+static int sc_seccomp(unsigned int operation, unsigned int flags, void *args)
+{
+#ifndef __NR_seccomp
+#   define __NR_seccomp 317
+#endif
+    return syscall(__NR_seccomp, operation, flags, args);
+}
+#endif
+
+static void install_bpf(struct sigaction *sig_act)
+{
+    static int enable_seccomp = -1;
+
+    if (enable_seccomp == -1)
+        enable_seccomp = getenv("WINESECCOMP") && atoi(getenv("WINESECCOMP"));
+
+    if (!enable_seccomp)
+        return;
+
+    MESSAGE("wine: enabling seccomp syscall filters.\n");
+
+#ifdef HAVE_SECCOMP
+#   ifndef SECCOMP_FILTER_FLAG_SPEC_ALLOW
+#       define SECCOMP_FILTER_FLAG_SPEC_ALLOW (1UL << 2)
+#   endif
+
+#   ifndef SECCOMP_SET_MODE_FILTER
+#       define SECCOMP_SET_MODE_FILTER 1
+#   endif
+    static const unsigned int flags = SECCOMP_FILTER_FLAG_SPEC_ALLOW;
+    static struct sock_filter filter[] =
+    {
+       BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                (offsetof(struct seccomp_data, nr))),
+       BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0xf000, 0, 1),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog prog;
+    int ret;
+
+    memset(&prog, 0, sizeof(prog));
+    prog.len = ARRAY_SIZE(filter);
+    prog.filter = filter;
+
+    if (!(ret = prctl(PR_GET_SECCOMP, 0, NULL, 0, 0)))
+    {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+        {
+            perror("prctl(PR_SET_NO_NEW_PRIVS, ...)");
+            exit(1);
+        }
+
+        if (sc_seccomp(SECCOMP_SET_MODE_FILTER, flags, &prog))
+
+        {
+            perror("prctl(PR_SET_SECCOMP, ...)");
+            exit(1);
+        }
+    }
+    else
+    {
+        if (ret == 2)
+            TRACE("Seccomp filters already installed.\n");
+        else
+            ERR("Seccomp filters cannot be installed, ret %d, error %s.\n", ret, strerror(errno));
+    }
+
+    sig_act->sa_sigaction = sigsys_handler;
+    sigaction(SIGSYS, sig_act, NULL);
+#else
+    WARN("Built without seccomp.\n");
+#endif
+}
+
 /**********************************************************************
  *		signal_init_process
  */
@@ -3277,6 +3437,9 @@ void signal_init_process(void)
     sig_act.sa_sigaction = trap_handler;
     if (sigaction( SIGTRAP, &sig_act, NULL ) == -1) goto error;
 #endif
+
+    install_bpf(&sig_act);
+
     return;
 
  error:
@@ -3284,6 +3447,29 @@ void signal_init_process(void)
     exit(1);
 }
 
+/**********************************************************************
+ *    signal_init_early
+ */
+void signal_init_early(void)
+{
+    struct sigaction sig_act;
+
+    sig_act.sa_mask = server_block_set;
+    sig_act.sa_flags = SA_RESTART | SA_SIGINFO | SA_ONSTACK;
+
+    sig_act.sa_sigaction = segv_handler_early;
+    if (sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
+    if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
+#ifdef SIGBUS
+    if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
+#endif
+
+    return;
+
+ error:
+    perror("sigaction");
+    exit(1);
+}
 
 static ULONG64 get_int_reg( CONTEXT *context, int reg )
 {

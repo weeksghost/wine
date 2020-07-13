@@ -26,6 +26,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <fcntl.h>
+#ifdef HAVE_TERMIOS_H
+# include <termios.h>
+#endif
 #include <sys/time.h>
 #ifdef HAVE_SYS_IOCTL_H
 # include <sys/ioctl.h>
@@ -89,6 +92,7 @@ struct disk_device
     STORAGE_DEVICE_NUMBER devnum;      /* device number info */
     char                 *unix_device; /* unix device path */
     char                 *unix_mount;  /* unix mount point path */
+    char                 *serial;      /* disk serial number */
 };
 
 struct volume
@@ -873,6 +877,7 @@ static void delete_disk_device( struct disk_device *device )
     }
     RtlFreeHeap( GetProcessHeap(), 0, device->unix_device );
     RtlFreeHeap( GetProcessHeap(), 0, device->unix_mount );
+    RtlFreeHeap( GetProcessHeap(), 0, device->serial );
     RtlFreeUnicodeString( &device->name );
     IoDeleteDevice( device->dev_obj );
 }
@@ -1078,9 +1083,40 @@ static BOOL get_volume_device_info( struct volume *volume )
     return TRUE;
 }
 
+/* set disk serial for dos devices that reside on a given Unix device */
+static void set_dos_devices_disk_serial( struct disk_device *device )
+{
+    struct dos_drive *drive;
+    struct stat dev_st, drive_st;
+    char *path, *p;
+
+    if (!device->serial || !device->unix_mount || stat( device->unix_mount, &dev_st ) == -1) return;
+
+    if (!(path = get_dosdevices_path( &p ))) return;
+    p[2] = 0;
+
+    LIST_FOR_EACH_ENTRY( drive, &drives_list, struct dos_drive, entry )
+    {
+        /* drives mapped to Unix devices already have serial set, if available */
+        if (drive->volume->device->unix_device) continue;
+
+        p[0] = 'a' + drive->drive;
+
+        /* copy serial if drive resides on this Unix device */
+        if (stat( path, &drive_st ) != -1 && drive_st.st_rdev == dev_st.st_rdev)
+        {
+            HeapFree( GetProcessHeap(), 0, drive->volume->device->serial );
+            drive->volume->device->serial = strdupA( device->serial );
+        }
+    }
+
+    HeapFree( GetProcessHeap(), 0, path );
+}
+
 /* change the information for an existing volume */
 static NTSTATUS set_volume_info( struct volume *volume, struct dos_drive *drive, const char *device,
-                                 const char *mount_point, enum device_type type, const GUID *guid )
+                                 const char *mount_point, enum device_type type, const GUID *guid,
+                                 const char *disk_serial )
 {
     void *id = NULL;
     unsigned int id_len = 0;
@@ -1107,9 +1143,12 @@ static NTSTATUS set_volume_info( struct volume *volume, struct dos_drive *drive,
     {
         RtlFreeHeap( GetProcessHeap(), 0, disk_device->unix_device );
         RtlFreeHeap( GetProcessHeap(), 0, disk_device->unix_mount );
+        RtlFreeHeap( GetProcessHeap(), 0, disk_device->serial );
     }
     disk_device->unix_device = strdupA( device );
     disk_device->unix_mount = strdupA( mount_point );
+    disk_device->serial = strdupA( disk_serial );
+    set_dos_devices_disk_serial( disk_device );
 
     if (!get_volume_device_info( volume ))
     {
@@ -1149,8 +1188,8 @@ static NTSTATUS set_volume_info( struct volume *volume, struct dos_drive *drive,
         id = disk_device->unix_mount;
         id_len = strlen( disk_device->unix_mount ) + 1;
     }
-    if (volume->mount) set_mount_point_id( volume->mount, id, id_len );
-    if (drive && drive->mount) set_mount_point_id( drive->mount, id, id_len );
+    if (volume->mount) set_mount_point_id( volume->mount, id, id_len, -1 );
+    if (drive && drive->mount) set_mount_point_id( drive->mount, id, id_len, drive->drive );
 
     return STATUS_SUCCESS;
 }
@@ -1306,7 +1345,7 @@ static void create_drive_devices(void)
         {
             /* don't reset uuid if we used an existing volume */
             const GUID *guid = volume ? NULL : get_default_uuid(i);
-            set_volume_info( drive->volume, drive, device, link, drive_type, guid );
+            set_volume_info( drive->volume, drive, device, link, drive_type, guid, NULL );
         }
         else
         {
@@ -1459,7 +1498,7 @@ void set_scsi_device_name( SCSI_ADDRESS *scsi_addr, const UNICODE_STRING *dev )
 
 /* create a new disk volume */
 NTSTATUS add_volume( const char *udi, const char *device, const char *mount_point,
-                     enum device_type type, const GUID *guid )
+                     enum device_type type, const GUID *guid, const char *disk_serial )
 {
     struct volume *volume;
     NTSTATUS status = STATUS_SUCCESS;
@@ -1480,13 +1519,13 @@ NTSTATUS add_volume( const char *udi, const char *device, const char *mount_poin
     else status = create_volume( udi, type, &volume );
 
 found:
-    if (!status) status = set_volume_info( volume, NULL, device, mount_point, type, guid );
+    if (!status) status = set_volume_info( volume, NULL, device, mount_point, type, guid, disk_serial );
     if (volume) release_volume( volume );
     LeaveCriticalSection( &device_section );
     return status;
 }
 
-/* create a new disk volume */
+/* remove a disk volume */
 NTSTATUS remove_volume( const char *udi )
 {
     NTSTATUS status = STATUS_NO_SUCH_DEVICE;
@@ -1560,7 +1599,7 @@ found:
     p[0] = 'a' + drive->drive;
     p[2] = 0;
     update_symlink( path, mount_point, volume->device->unix_mount );
-    set_volume_info( volume, drive, device, mount_point, type, guid );
+    set_volume_info( volume, drive, device, mount_point, type, guid, NULL );
 
     TRACE( "added device %c: udi %s for %s on %s type %u\n",
            'a' + drive->drive, wine_dbgstr_a(udi), wine_dbgstr_a(device),
@@ -1713,7 +1752,7 @@ NTSTATUS query_unix_device( ULONGLONG unix_dev, enum device_type *type,
     return status;
 }
 
-static void query_property(IRP *irp)
+static void query_property( struct disk_device *device, IRP *irp )
 {
     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
     STORAGE_PROPERTY_QUERY *query = irp->AssociatedIrp.SystemBuffer;
@@ -1737,15 +1776,18 @@ static void query_property(IRP *irp)
     case StorageDeviceProperty:
     {
         STORAGE_DEVICE_DESCRIPTOR *descriptor;
+        DWORD len = sizeof(*descriptor);
+
+        if (device->serial) len += strlen( device->serial ) + 1;
 
         if (!irp->UserBuffer
             || irpsp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
             irp->IoStatus.u.Status = STATUS_INVALID_PARAMETER;
-        else if (irpsp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(STORAGE_DEVICE_DESCRIPTOR))
+        else if (irpsp->Parameters.DeviceIoControl.OutputBufferLength < len)
         {
             descriptor = irp->UserBuffer;
             descriptor->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
-            descriptor->Size = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+            descriptor->Size = len;
             irp->IoStatus.Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
             irp->IoStatus.u.Status = STATUS_SUCCESS;
         }
@@ -1756,7 +1798,7 @@ static void query_property(IRP *irp)
             memset( irp->UserBuffer, 0, irpsp->Parameters.DeviceIoControl.OutputBufferLength );
             descriptor = irp->UserBuffer;
             descriptor->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
-            descriptor->Size = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+            descriptor->Size = len;
             descriptor->DeviceType = FILE_DEVICE_DISK;
             descriptor->DeviceTypeModifier = 0;
             descriptor->RemovableMedia = FALSE;
@@ -1764,11 +1806,15 @@ static void query_property(IRP *irp)
             descriptor->VendorIdOffset = 0;
             descriptor->ProductIdOffset = 0;
             descriptor->ProductRevisionOffset = 0;
-            descriptor->SerialNumberOffset = 0;
             descriptor->BusType = BusTypeScsi;
             descriptor->RawPropertiesLength = 0;
-
-            irp->IoStatus.Information = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+            if (!device->serial) descriptor->SerialNumberOffset = 0;
+            else
+            {
+                descriptor->SerialNumberOffset = sizeof(*descriptor);
+                strcpy( (char *)descriptor + descriptor->SerialNumberOffset, device->serial );
+            }
+            irp->IoStatus.Information = len;
             irp->IoStatus.u.Status = STATUS_SUCCESS;
         }
 
@@ -1854,7 +1900,7 @@ static NTSTATUS WINAPI harddisk_ioctl( DEVICE_OBJECT *device, IRP *irp )
         break;
     }
     case IOCTL_STORAGE_QUERY_PROPERTY:
-        query_property( irp );
+        query_property( dev, irp );
         break;
     default:
     {
@@ -1924,6 +1970,27 @@ static BOOL create_port_device( DRIVER_OBJECT *driver, int n, const char *unix_p
     }
 
     sprintfW( dos_name, dos_name_format, n );
+
+#ifdef linux
+    /* Serial port device files almost always exist on Linux even if the corresponding serial
+     * ports don't exist. Do a basic functionality check before advertising a serial port. */
+    if (driver == serial_driver)
+    {
+        struct termios tios;
+        int fd;
+
+        if ((fd = open( unix_path, O_RDONLY )) == -1)
+            return FALSE;
+
+        if (tcgetattr( fd, &tios ) == -1)
+        {
+            close( fd );
+            return FALSE;
+        }
+
+        close( fd );
+    }
+#endif
 
     /* create DOS device */
     unlink( dosdevices_path );

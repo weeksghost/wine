@@ -233,6 +233,7 @@ BOOL WINAPI CreateDirectoryExA( LPCSTR template, LPCSTR path, LPSECURITY_ATTRIBU
  */
 BOOL WINAPI RemoveDirectoryW( LPCWSTR path )
 {
+    FILE_BASIC_INFORMATION info;
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING nt_name;
     ANSI_STRING unix_name;
@@ -263,16 +264,25 @@ BOOL WINAPI RemoveDirectoryW( LPCWSTR path )
         return FALSE;
     }
 
-    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN, FALSE );
-    RtlFreeUnicodeString( &nt_name );
-    if (!set_ntstatus( status ))
+    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN );
+    if (status == STATUS_SUCCESS)
     {
-        NtClose( handle );
-        return FALSE;
+        status = NtQueryAttributesFile( &attr, &info );
+        if (status == STATUS_SUCCESS && (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+                                        (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            ret = (unlink( unix_name.Buffer ) != -1);
+        else
+            ret = (rmdir( unix_name.Buffer ) != -1);
+        if (status == STATUS_SUCCESS && (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+                                        !(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            SetLastError( ERROR_DIRECTORY );
+        else if (!ret) FILE_SetDosError();
+        RtlFreeAnsiString( &unix_name );
     }
+    else
+        set_ntstatus( status );
+    RtlFreeUnicodeString( &nt_name );
 
-    if (!(ret = (rmdir( unix_name.Buffer ) != -1))) FILE_SetDosError();
-    RtlFreeAnsiString( &unix_name );
     NtClose( handle );
     return ret;
 }
@@ -342,7 +352,7 @@ char * CDECL wine_get_unix_file_name( LPCWSTR dosW )
     NTSTATUS status;
 
     if (!RtlDosPathNameToNtPathName_U( dosW, &nt_name, NULL, NULL )) return NULL;
-    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN_IF, FALSE );
+    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN_IF );
     RtlFreeUnicodeString( &nt_name );
     if (status && status != STATUS_NO_SUCH_FILE)
     {

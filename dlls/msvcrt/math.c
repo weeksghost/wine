@@ -57,6 +57,61 @@ static MSVCRT_matherr_func MSVCRT_default_matherr_func = NULL;
 static BOOL sse2_supported;
 static BOOL sse2_enabled;
 
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+
+static inline double precise_cosh( double x )
+{
+    WORD precise_cw = 0x37f, pre_cw;
+    double z;
+    __asm__ __volatile__( "fnstcw %0" : "=m" (pre_cw) );
+    __asm__ __volatile__( "fldcw %0" : : "m" (precise_cw) );
+    z = cosh( x );
+    __asm__ __volatile__( "fldcw %0" : : "m" (pre_cw) );
+    return z;
+}
+
+static inline double precise_exp( double x )
+{
+    WORD precise_cw = 0x37f, pre_cw;
+    double z;
+    __asm__ __volatile__( "fnstcw %0" : "=m" (pre_cw) );
+    __asm__ __volatile__( "fldcw %0" : : "m" (precise_cw) );
+    z = exp( x );
+    __asm__ __volatile__( "fldcw %0" : : "m" (pre_cw) );
+    return z;
+}
+
+static inline double precise_pow( double x, double y )
+{
+    WORD precise_cw = 0x37f, pre_cw;
+    double z;
+    __asm__ __volatile__( "fnstcw %0" : "=m" (pre_cw) );
+    __asm__ __volatile__( "fldcw %0" : : "m" (precise_cw) );
+    z = pow( x, y );
+    __asm__ __volatile__( "fldcw %0" : : "m" (pre_cw) );
+    return z;
+}
+
+static inline double precise_sinh( double x )
+{
+    WORD precise_cw = 0x37f, pre_cw;
+    double z;
+    __asm__ __volatile__( "fnstcw %0" : "=m" (pre_cw) );
+    __asm__ __volatile__( "fldcw %0" : : "m" (precise_cw) );
+    z = sinh( x );
+    __asm__ __volatile__( "fldcw %0" : : "m" (pre_cw) );
+    return z;
+}
+
+#else
+
+#define precise_cosh cosh
+#define precise_exp  exp
+#define precise_pow  pow
+#define precise_sinh sinh
+
+#endif
+
 void msvcrt_init_math(void)
 {
     sse2_supported = sse2_enabled = IsProcessorFeaturePresent( PF_XMMI64_INSTRUCTIONS_AVAILABLE );
@@ -479,7 +534,7 @@ double CDECL MSVCRT_cos( double x )
  */
 double CDECL MSVCRT_cosh( double x )
 {
-  double ret = cosh(x);
+  double ret = precise_cosh(x);
   if (isnan(x)) math_error(_DOMAIN, "cosh", x, 0, ret);
   return ret;
 }
@@ -489,7 +544,7 @@ double CDECL MSVCRT_cosh( double x )
  */
 double CDECL MSVCRT_exp( double x )
 {
-  double ret = exp(x);
+  double ret = precise_exp(x);
   if (isnan(x)) math_error(_DOMAIN, "exp", x, 0, ret);
   else if (isfinite(x) && !ret) math_error(_UNDERFLOW, "exp", x, 0, ret);
   else if (isfinite(x) && !isfinite(ret)) math_error(_OVERFLOW, "exp", x, 0, ret);
@@ -533,7 +588,7 @@ double CDECL MSVCRT_log10( double x )
  */
 double CDECL MSVCRT_pow( double x, double y )
 {
-  double z = pow(x,y);
+  double z = precise_pow(x,y);
   if (x < 0 && y != floor(y)) math_error(_DOMAIN, "pow", x, y, z);
   else if (!x && isfinite(y) && y < 0) math_error(_SING, "pow", x, y, z);
   else if (isfinite(x) && isfinite(y) && !isfinite(z)) math_error(_OVERFLOW, "pow", x, y, z);
@@ -556,7 +611,7 @@ double CDECL MSVCRT_sin( double x )
  */
 double CDECL MSVCRT_sinh( double x )
 {
-  double ret = sinh(x);
+  double ret = precise_sinh(x);
   if (isnan(x)) math_error(_DOMAIN, "sinh", x, 0, ret);
   return ret;
 }
@@ -1101,6 +1156,41 @@ double CDECL MSVCRT__chgsign(double num)
  * Not exported by native msvcrt, added in msvcr80.
  */
 #ifdef __i386__
+static unsigned int get_flags_from_mxcsr(void) {
+#ifdef __GNUC__
+    unsigned long fpword;
+    unsigned int flags;
+
+    __asm__ __volatile__( "stmxcsr %0" : "=m" (fpword) );
+
+    /* Convert into mask constants */
+    flags = 0;
+    if (fpword & 0x80)   flags |= MSVCRT__EM_INVALID;
+    if (fpword & 0x100)  flags |= MSVCRT__EM_DENORMAL;
+    if (fpword & 0x200)  flags |= MSVCRT__EM_ZERODIVIDE;
+    if (fpword & 0x400)  flags |= MSVCRT__EM_OVERFLOW;
+    if (fpword & 0x800)  flags |= MSVCRT__EM_UNDERFLOW;
+    if (fpword & 0x1000) flags |= MSVCRT__EM_INEXACT;
+    switch (fpword & 0x6000)
+    {
+    case 0x6000: flags |= MSVCRT__RC_UP|MSVCRT__RC_DOWN; break;
+    case 0x4000: flags |= MSVCRT__RC_UP; break;
+    case 0x2000: flags |= MSVCRT__RC_DOWN; break;
+    }
+    switch (fpword & 0x8040)
+    {
+    case 0x0040: flags |= MSVCRT__DN_FLUSH_OPERANDS_SAVE_RESULTS; break;
+    case 0x8000: flags |= MSVCRT__DN_SAVE_OPERANDS_FLUSH_RESULTS; break;
+    case 0x8040: flags |= MSVCRT__DN_FLUSH; break;
+    }
+
+    return flags;
+#else
+    FIXME( "not implemented\n" );
+    return 0;
+#endif
+}
+
 int CDECL __control87_2( unsigned int newval, unsigned int mask,
                          unsigned int *x86_cw, unsigned int *sse2_cw )
 {
@@ -1170,28 +1260,7 @@ int CDECL __control87_2( unsigned int newval, unsigned int mask,
 
     if (sse2_supported)
     {
-        __asm__ __volatile__( "stmxcsr %0" : "=m" (fpword) );
-
-        /* Convert into mask constants */
-        flags = 0;
-        if (fpword & 0x80)   flags |= MSVCRT__EM_INVALID;
-        if (fpword & 0x100)  flags |= MSVCRT__EM_DENORMAL;
-        if (fpword & 0x200)  flags |= MSVCRT__EM_ZERODIVIDE;
-        if (fpword & 0x400)  flags |= MSVCRT__EM_OVERFLOW;
-        if (fpword & 0x800)  flags |= MSVCRT__EM_UNDERFLOW;
-        if (fpword & 0x1000) flags |= MSVCRT__EM_INEXACT;
-        switch (fpword & 0x6000)
-        {
-        case 0x6000: flags |= MSVCRT__RC_UP|MSVCRT__RC_DOWN; break;
-        case 0x4000: flags |= MSVCRT__RC_UP; break;
-        case 0x2000: flags |= MSVCRT__RC_DOWN; break;
-        }
-        switch (fpword & 0x8040)
-        {
-        case 0x0040: flags |= MSVCRT__DN_FLUSH_OPERANDS_SAVE_RESULTS; break;
-        case 0x8000: flags |= MSVCRT__DN_SAVE_OPERANDS_FLUSH_RESULTS; break;
-        case 0x8040: flags |= MSVCRT__DN_FLUSH; break;
-        }
+        flags = get_flags_from_mxcsr();
 
         TRACE( "sse2 flags=%08x newval=%08x mask=%08x\n", flags, newval, mask );
         if (mask)
@@ -1241,7 +1310,8 @@ unsigned int CDECL _control87(unsigned int newval, unsigned int mask)
 #ifdef __i386__
     unsigned int sse2_cw;
 
-    __control87_2( newval, mask, &flags, &sse2_cw );
+    __control87_2( newval, mask, &flags, 0 );
+    sse2_cw = get_flags_from_mxcsr();
 
     if ((flags ^ sse2_cw) & (MSVCRT__MCW_EM | MSVCRT__MCW_RC)) flags |= MSVCRT__EM_AMBIGUOUS;
 #elif defined(__x86_64__)

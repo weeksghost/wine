@@ -80,6 +80,11 @@ static DWORD client_tid;
 
 static HANDLE ntoskrnl_heap;
 
+static PLOAD_IMAGE_NOTIFY_ROUTINE load_image_notify_routines[8];
+static unsigned int load_image_notify_routine_count;
+
+#define IMAGE_ADDRESSING_MODE_32BIT 3
+
 struct wine_driver
 {
     DRIVER_OBJECT driver_obj;
@@ -970,6 +975,17 @@ void WINAPI IoInitializeIrp( IRP *irp, USHORT size, CCHAR stack_size )
             (PIO_STACK_LOCATION)(irp + 1) + stack_size;
 }
 
+void WINAPI IoReuseIrp(PIRP irp, NTSTATUS Iostatus)
+{
+    UCHAR AllocationFlags;
+
+    TRACE("irp %p, Iostatus %#x.\n", irp, Iostatus);
+
+    AllocationFlags = irp->AllocationFlags;
+    IoInitializeIrp(irp, irp->Size, irp->StackCount);
+    irp->AllocationFlags = AllocationFlags;
+    irp->IoStatus.u.Status = Iostatus;
+}
 
 /***********************************************************************
  *           IoInitializeTimer   (NTOSKRNL.EXE.@)
@@ -1079,7 +1095,11 @@ PMDL WINAPI IoAllocateMdl( PVOID va, ULONG length, BOOLEAN secondary, BOOLEAN ch
 
     MmInitializeMdl( mdl, va, length );
 
-    if (!irp) return mdl;
+    if (!irp)
+    {
+        TRACE("returning mdl %p.\n", mdl);
+        return mdl;
+    }
 
     if (secondary)  /* add it at the end */
     {
@@ -1092,6 +1112,7 @@ PMDL WINAPI IoAllocateMdl( PVOID va, ULONG length, BOOLEAN secondary, BOOLEAN ch
         mdl->Next = irp->MdlAddress;
         irp->MdlAddress = mdl;
     }
+    TRACE("returning mdl %p.\n", mdl);
     return mdl;
 }
 
@@ -1633,6 +1654,16 @@ NTSTATUS WINAPI IoDeleteSymbolicLink( UNICODE_STRING *name )
 }
 
 /***********************************************************************
+ *           IoGetDeviceAttachmentBaseRef   (NTOSKRNL.EXE.@)
+ */
+PDEVICE_OBJECT WINAPI IoGetDeviceAttachmentBaseRef( PDEVICE_OBJECT device )
+{
+    FIXME( "(%p): stub\n", device );
+    return NULL;
+}
+
+
+/***********************************************************************
  *           IoGetDeviceInterfaces   (NTOSKRNL.EXE.@)
  */
 NTSTATUS WINAPI IoGetDeviceInterfaces( const GUID *InterfaceClassGuid,
@@ -2053,10 +2084,25 @@ NTSTATUS WINAPI ExCreateCallback(PCALLBACK_OBJECT *obj, POBJECT_ATTRIBUTES attr,
                                  BOOLEAN create, BOOLEAN allow_multiple)
 {
     FIXME("(%p, %p, %u, %u): stub\n", obj, attr, create, allow_multiple);
+    FIXME("name %s, RootDirectory %p.\n", debugstr_w(attr->ObjectName->Buffer), attr->RootDirectory);
 
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_SUCCESS;
 }
 
+typedef VOID WINAPI (*PCALLBACK_FUNCTION )(IN PVOID CallbackContext, IN PVOID Argument1, IN PVOID Argument2);
+
+
+PVOID WINAPI ExRegisterCallback(PCALLBACK_OBJECT CallbackObject, PCALLBACK_FUNCTION CallbackFunction, PVOID CallbackContext)
+{
+    FIXME("CallbackObject %p, CallbackFunction %p, CallbackContext %p.\n", CallbackObject, CallbackFunction, CallbackContext);
+
+    return (void *)0xdeadbeef;
+}
+
+void WINAPI ExUnregisterCallback(PVOID CallbackRegistration)
+{
+    FIXME("CallbackRegistration %p stub.\n", CallbackRegistration);
+}
 
 /***********************************************************************
  *           ExFreePool   (NTOSKRNL.EXE.@)
@@ -2385,6 +2431,18 @@ KAFFINITY WINAPI KeQueryActiveProcessors( void )
     return AffinityMask;
 }
 
+ULONG WINAPI KeQueryActiveProcessorCountEx(USHORT group_number)
+{
+    TRACE("group_number %u.\n", group_number);
+
+    if (group_number && group_number != ALL_PROCESSOR_GROUPS)
+    {
+        FIXME("group_number %u not supported.\n", group_number);
+        return 0;
+    }
+
+    return NtCurrentTeb()->Peb->NumberOfProcessors;
+}
 
 /**********************************************************************
  *           KeQueryInterruptTime   (NTOSKRNL.EXE.@)
@@ -2449,6 +2507,29 @@ VOID WINAPI KeSetSystemAffinityThread(KAFFINITY Affinity)
     FIXME("(%lx) stub\n", Affinity);
 }
 
+KAFFINITY WINAPI KeSetSystemAffinityThreadEx(KAFFINITY Affinity)
+{
+    GROUP_AFFINITY old, new;
+    NTSTATUS status;
+
+    FIXME("(%#lx) semi-stub\n", Affinity);
+
+    status = NtQueryInformationThread( GetCurrentThread(), ThreadGroupInformation,
+                                                   &old, sizeof(old), NULL );
+    if (status)
+        FIXME("Get affinity, status %#x.\n", status);
+
+    memset(&new, 0, sizeof(new));
+    new.Mask = Affinity;
+
+    status = NtSetInformationThread( GetCurrentThread(), ThreadGroupInformation, &new, sizeof(new) );
+    if (status)
+        FIXME("Set affinity, status %#x.\n", status);
+
+    FIXME("old.Group %#x, old.Mask %#lx.\n", old.Group, old.Mask);
+    return old.Mask;
+}
+
 
 /***********************************************************************
  *           KeRevertToUserAffinityThread   (NTOSKRNL.EXE.@)
@@ -2458,6 +2539,20 @@ void WINAPI KeRevertToUserAffinityThread(void)
     FIXME("() stub\n");
 }
 
+void WINAPI KeRevertToUserAffinityThreadEx(KAFFINITY Affinity)
+{
+    GROUP_AFFINITY new;
+    NTSTATUS status;
+
+    FIXME("Affinity %#lx stub.\n", Affinity);
+
+    memset(&new, 0, sizeof(new));
+    new.Mask = Affinity;
+
+    status = NtSetInformationThread( GetCurrentThread(), ThreadGroupInformation, &new, sizeof(new) );
+    if (status)
+        FIXME("Set affinity, status %#x.\n", status);
+}
 
 /***********************************************************************
  *           IoRegisterFileSystem   (NTOSKRNL.EXE.@)
@@ -2601,6 +2696,16 @@ VOID WINAPI MmLockPagableSectionByHandle(PVOID ImageSectionHandle)
 {
     FIXME("stub %p\n", ImageSectionHandle);
 }
+
+ /***********************************************************************
+ *           MmMapLockedPages   (NTOSKRNL.EXE.@)
+ */
+PVOID WINAPI MmMapLockedPages(PMDL MemoryDescriptorList, KPROCESSOR_MODE AccessMode)
+{
+    TRACE("%p %d\n", MemoryDescriptorList, AccessMode);
+    return MemoryDescriptorList->MappedSystemVa;
+}
+
 
 /***********************************************************************
  *           MmMapLockedPagesSpecifyCache  (NTOSKRNL.EXE.@)
@@ -2755,9 +2860,17 @@ void FASTCALL ObfDereferenceObject( void *obj )
 /***********************************************************************
  *           ObRegisterCallbacks (NTOSKRNL.EXE.@)
  */
-NTSTATUS WINAPI ObRegisterCallbacks(POB_CALLBACK_REGISTRATION *callBack, void **handle)
+NTSTATUS WINAPI ObRegisterCallbacks(POB_CALLBACK_REGISTRATION callBack, void **handle)
 {
+    unsigned int i;
+
     FIXME( "stub: %p %p\n", callBack, handle );
+
+    for (i = 0; i < callBack->OperationRegistrationCount; ++i)
+    {
+        TRACE("i %u, type name %s, PreOperation %p, PostOperation %p.\n", i, debugstr_w((*callBack->OperationRegistration[i].ObjectType)->name),
+                callBack->OperationRegistration[i].PreOperation, callBack->OperationRegistration[i].PostOperation);
+    }
 
     if(handle)
         *handle = UlongToHandle(0xdeadbeaf);
@@ -2925,10 +3038,20 @@ NTSTATUS WINAPI PsRemoveCreateThreadNotifyRoutine( PCREATE_THREAD_NOTIFY_ROUTINE
 /***********************************************************************
  *           PsRemoveLoadImageNotifyRoutine  (NTOSKRNL.EXE.@)
  */
- NTSTATUS WINAPI PsRemoveLoadImageNotifyRoutine(PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine)
+ NTSTATUS WINAPI PsRemoveLoadImageNotifyRoutine(PLOAD_IMAGE_NOTIFY_ROUTINE routine)
  {
-    FIXME( "stub: %p\n", NotifyRoutine );
-    return STATUS_SUCCESS;
+    unsigned int i;
+
+    TRACE("routine %p.\n", routine);
+
+    for (i = 0; i < load_image_notify_routine_count; ++i)
+        if (load_image_notify_routines[i] == routine)
+        {
+            memmove(&load_image_notify_routines[i], &load_image_notify_routines[i + 1],
+                    sizeof(*load_image_notify_routines) * (load_image_notify_routine_count - i - 1));
+            return STATUS_SUCCESS;
+        }
+    return STATUS_PROCEDURE_NOT_FOUND;
  }
 
 
@@ -2994,6 +3117,7 @@ PVOID WINAPI MmGetSystemRoutineAddress(PUNICODE_STRING SystemRoutineName)
         if (!pFunc)
         {
            hMod = GetModuleHandleW( halW );
+
            if (hMod) pFunc = GetProcAddress( hMod, routineNameA.Buffer );
         }
         RtlFreeAnsiString( &routineNameA );
@@ -3029,7 +3153,10 @@ MM_SYSTEMSIZE WINAPI MmQuerySystemSize(void)
  */
 VOID WINAPI KeInitializeDpc(PRKDPC Dpc, PKDEFERRED_ROUTINE DeferredRoutine, PVOID DeferredContext)
 {
-    FIXME("stub\n");
+    FIXME("Dpc %p, DeferredRoutine %p, DeferredContext %p, Dpc->DeferredRoutine %p stub\n", Dpc, DeferredRoutine, DeferredContext, Dpc->DeferredRoutine);
+
+    Dpc->DeferredRoutine = DeferredRoutine;
+    Dpc->DeferredContext = DeferredContext;
 }
 
 /***********************************************************************
@@ -3079,7 +3206,19 @@ NTSTATUS WINAPI IoWMIOpenBlock(LPCGUID guid, ULONG desired_access, PVOID *data_b
  */
 NTSTATUS WINAPI PsSetLoadImageNotifyRoutine(PLOAD_IMAGE_NOTIFY_ROUTINE routine)
 {
-    FIXME("(%p) stub\n", routine);
+    unsigned int i;
+
+    TRACE("routine %p.\n", routine);
+
+    for (i = 0; i < load_image_notify_routine_count; ++i)
+        if (load_image_notify_routines[i] == routine)
+            return STATUS_SUCCESS;
+
+    if (load_image_notify_routine_count == ARRAY_SIZE(load_image_notify_routines))
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    load_image_notify_routines[load_image_notify_routine_count++] = routine;
+
     return STATUS_SUCCESS;
 }
 
@@ -3291,6 +3430,11 @@ static NTSTATUS open_driver( const UNICODE_STRING *service_name, SC_HANDLE *serv
     SC_HANDLE manager_handle;
     DWORD config_size = 0;
     WCHAR *name;
+
+    if (wcsstr(service_name->Buffer, u"denuvo-anti-cheat-dse-check"))
+    {
+        return STATUS_INVALID_IMAGE_HASH;
+    }
 
     if (!(name = RtlAllocateHeap( GetProcessHeap(), 0, service_name->Length + sizeof(WCHAR) )))
         return STATUS_NO_MEMORY;
@@ -3567,6 +3711,31 @@ static HMODULE load_driver( const WCHAR *driver_name, const UNICODE_STRING *keyn
     TRACE( "loading driver %s\n", wine_dbgstr_w(str) );
 
     module = load_driver_module( str );
+
+    if (module && load_image_notify_routine_count)
+    {
+        UNICODE_STRING module_name;
+        IMAGE_NT_HEADERS *nt;
+        IMAGE_INFO info;
+        unsigned int i;
+
+        RtlInitUnicodeString(&module_name, str);
+        nt = RtlImageNtHeader(module);
+        memset(&info, 0, sizeof(info));
+        info.u.s.ImageAddressingMode = IMAGE_ADDRESSING_MODE_32BIT;
+        info.u.s.SystemModeImage = TRUE;
+        info.ImageSize = nt->OptionalHeader.SizeOfImage;
+        info.ImageBase = module;
+
+        for (i = 0; i < load_image_notify_routine_count; ++i)
+        {
+            TRACE("Calling image load notify %p.\n", load_image_notify_routines[i]);
+            load_image_notify_routines[i](&module_name, NULL, &info);
+            TRACE("Called image load notify %p.\n", load_image_notify_routines[i]);
+        }
+        RtlFreeUnicodeString(&module_name);
+    }
+
     HeapFree( GetProcessHeap(), 0, path );
     return module;
 }
@@ -3859,8 +4028,87 @@ NTSTATUS WINAPI MmCopyVirtualMemory(PEPROCESS fromprocess, PVOID fromaddress, PE
                                     PVOID toaddress, SIZE_T bufsize, KPROCESSOR_MODE mode,
                                     PSIZE_T copied)
 {
-    FIXME("stub: %p %p %p %p %lu %d %p\n", fromprocess, fromaddress, toprocess, toaddress, bufsize, mode, copied);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+    HANDLE handle_from, handle_to;
+    void *buffer = NULL;
+
+    TRACE("fromprocess %p, fromaddress %p, toprocess %p, toaddress %p, bufsize %lu, mode %d, copied %p.\n",
+            fromprocess, fromaddress, toprocess, toaddress, bufsize, mode, copied);
+
+    if (!fromprocess || !toprocess)
+    {
+        WARN("NULL process.\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    handle_from = handle_to = NULL;
+
+    if (fromprocess != IoGetCurrentProcess()
+            && !(handle_from = OpenProcess(PROCESS_ALL_ACCESS, FALSE, fromprocess->info.UniqueProcessId)))
+    {
+        WARN("Could not open process %#04lx.\n", fromprocess->info.UniqueProcessId);
+        status = STATUS_INVALID_PARAMETER;
+        goto done;
+    }
+
+    if (toprocess != IoGetCurrentProcess()
+            && !(handle_to = OpenProcess(PROCESS_ALL_ACCESS, FALSE, toprocess->info.UniqueProcessId)))
+    {
+        WARN("Could not open process %#04lx.\n", toprocess->info.UniqueProcessId);
+        status = STATUS_INVALID_PARAMETER;
+        goto done;
+    }
+
+    TRACE("handle_from %p, handle_to %p.\n", handle_from, handle_to);
+
+    if (!handle_from && !handle_to)
+    {
+        memcpy(toaddress, fromaddress, bufsize);
+        *copied = bufsize;
+        return STATUS_SUCCESS;
+    }
+
+    if (handle_from && handle_to)
+    {
+        if (!(buffer = heap_alloc(bufsize)))
+        {
+            ERR("No memory.\n");
+            status = STATUS_NO_MEMORY;
+            goto done;
+        }
+    }
+    else if (handle_from)
+    {
+        buffer = toaddress;
+    }
+    else
+    {
+        buffer = fromaddress;
+    }
+
+    if (handle_from)
+    {
+        if ((status = NtReadVirtualMemory(handle_from, fromaddress, buffer, bufsize, copied)))
+            goto done;
+
+        bufsize = min(bufsize, *copied);
+    }
+
+    if (handle_to)
+        status = NtWriteVirtualMemory(handle_to, toaddress, buffer, bufsize, copied);
+
+done:
+    if (handle_from && handle_to)
+        heap_free(buffer);
+
+    if (handle_from)
+        NtClose(handle_from);
+
+    if (handle_to)
+        NtClose(handle_to);
+
+    TRACE("status %#x.\n", status);
+    return status;
 }
 
 /*********************************************************************
@@ -3956,4 +4204,95 @@ BOOLEAN WINAPI RtlIsNtDdiVersionAvailable(ULONG version)
 {
     FIXME("stub: %d\n", version);
     return FALSE;
+}
+
+BOOLEAN WINAPI KdRefreshDebuggerNotPresent(void)
+{
+    TRACE(".\n");
+
+    return !KdDebuggerEnabled;
+}
+
+typedef struct _DEFERRED_REVERSE_BARRIER
+{
+    ULONG Barrier;
+    ULONG TotalProcessors;
+}
+DEFERRED_REVERSE_BARRIER;
+
+VOID WINAPI KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine, IN PVOID Context)
+{
+    ULONG ncpus = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    DEFERRED_REVERSE_BARRIER ReverseBarrier;
+
+    FIXME("Routine %p, Context %p sem-stub.\n", Routine, Context);
+
+    ReverseBarrier.Barrier = ncpus;
+    ReverseBarrier.TotalProcessors = ncpus;
+
+    Routine((PKDPC)0xdeadbeef, Context, &ncpus, &ReverseBarrier);
+}
+
+
+BOOLEAN NTAPI KeSignalCallDpcSynchronize(PVOID barrier)
+{
+    FIXME("barrier %p stub.\n", barrier);
+    return TRUE;
+}
+
+VOID WINAPI KeSignalCallDpcDone(IN PVOID barrier)
+{
+    InterlockedDecrement((PLONG)barrier);
+}
+
+PVOID WINAPI PsGetProcessSectionBaseAddress(PEPROCESS process)
+{
+    void *image_base;
+    SIZE_T size;
+    HANDLE h;
+    BOOL ret;
+
+    TRACE("process %p, id 0x%04lx.\n", process, process ? process->info.UniqueProcessId : 0);
+
+    if (!process)
+        return NULL;
+
+    if (!(h = OpenProcess( PROCESS_ALL_ACCESS, FALSE, process->info.UniqueProcessId)))
+    {
+        WARN("Could not open process %#04lx.\n", process->info.UniqueProcessId);
+        return NULL;
+    }
+
+    size = 0;
+    ret = ReadProcessMemory(h, &process->info.PebBaseAddress->ImageBaseAddress, &image_base,
+            sizeof(image_base), &size);
+
+    NtClose(h);
+
+    if (!ret || size != sizeof(image_base))
+    {
+        WARN("Error reading process memory, ret %#x, size %lu, GetLastError() %u.\n", ret, size, GetLastError());
+        return NULL;
+    }
+    TRACE("returning %p.\n", image_base);
+    return image_base;
+}
+
+typedef struct _KAPC_STATE
+{
+     LIST_ENTRY ApcListHead[2];
+     PEPROCESS Process;
+     UCHAR KernelApcInProgress;
+     UCHAR KernelApcPending;
+     UCHAR UserApcPending;
+} KAPC_STATE, *PKAPC_STATE;
+
+void WINAPI KeStackAttachProcess(PEPROCESS PROCESS, PKAPC_STATE ApcState)
+{
+    FIXME("Stub.\n");
+}
+
+void WINAPI KeUnstackDetachProcess(PKAPC_STATE ApcState)
+{
+    FIXME("Stub.\n");
 }

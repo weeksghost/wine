@@ -43,6 +43,8 @@
 #include "wine/exception.h"
 #include "wine/debug.h"
 
+#include "wine/heap.h"
+
 WINE_DEFAULT_DEBUG_CHANNEL(file);
 
 /* info structure for FindFirstFile handle */
@@ -503,6 +505,10 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
     DWORD count;
     BOOL ret = FALSE;
     char *buffer;
+    LARGE_INTEGER size;
+    LARGE_INTEGER transferred;
+    DWORD cbret;
+    DWORD source_access = GENERIC_READ;
 
     if (!source || !dest)
     {
@@ -517,7 +523,15 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
 
     TRACE("%s -> %s, %x\n", debugstr_w(source), debugstr_w(dest), flags);
 
-    if ((h1 = CreateFileW( source, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    if (flags & COPY_FILE_RESTARTABLE)
+        FIXME("COPY_FILE_RESTARTABLE is not supported\n");
+    if (flags & COPY_FILE_COPY_SYMLINK)
+        FIXME("COPY_FILE_COPY_SYMLINK is not supported\n");
+
+    if (flags & COPY_FILE_OPEN_SOURCE_FOR_WRITE)
+        source_access |= GENERIC_WRITE;
+
+    if ((h1 = CreateFileW( source, source_access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            NULL, OPEN_EXISTING, 0, 0 )) == INVALID_HANDLE_VALUE)
     {
         WARN("Unable to open source %s\n", debugstr_w(source));
@@ -551,7 +565,11 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
         }
     }
 
-    if ((h2 = CreateFileW( dest, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+    if ((h2 = CreateFileW( dest, GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           (flags & COPY_FILE_FAIL_IF_EXISTS) ? CREATE_NEW : CREATE_ALWAYS,
+                           info.dwFileAttributes, h1 )) == INVALID_HANDLE_VALUE &&
+        /* retry without DELETE if we got a sharing violation */
+        (h2 = CreateFileW( dest, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            (flags & COPY_FILE_FAIL_IF_EXISTS) ? CREATE_NEW : CREATE_ALWAYS,
                            info.dwFileAttributes, h1 )) == INVALID_HANDLE_VALUE)
     {
@@ -559,6 +577,30 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
         HeapFree( GetProcessHeap(), 0, buffer );
         CloseHandle( h1 );
         return FALSE;
+    }
+
+    size.u.LowPart = info.nFileSizeLow;
+    size.u.HighPart = info.nFileSizeHigh;
+    transferred.QuadPart = 0;
+
+    if (progress)
+    {
+        cbret = progress( size, transferred, size, transferred, 1,
+                          CALLBACK_STREAM_SWITCH, h1, h2, param );
+        if (cbret == PROGRESS_QUIET)
+            progress = NULL;
+        else if (cbret == PROGRESS_STOP)
+        {
+            SetLastError( ERROR_REQUEST_ABORTED );
+            goto done;
+        }
+        else if (cbret == PROGRESS_CANCEL)
+        {
+            BOOLEAN disp = TRUE;
+            SetFileInformationByHandle( h2, FileDispositionInfo, &disp, sizeof(disp) );
+            SetLastError( ERROR_REQUEST_ABORTED );
+            goto done;
+        }
     }
 
     while (ReadFile( h1, buffer, buffer_size, &count, NULL ) && count)
@@ -570,6 +612,27 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
             if (!WriteFile( h2, p, count, &res, NULL ) || !res) goto done;
             p += res;
             count -= res;
+
+            if (progress)
+            {
+                transferred.QuadPart += res;
+                cbret = progress( size, transferred, size, transferred, 1,
+                                  CALLBACK_CHUNK_FINISHED, h1, h2, param );
+                if (cbret == PROGRESS_QUIET)
+                    progress = NULL;
+                else if (cbret == PROGRESS_STOP)
+                {
+                    SetLastError( ERROR_REQUEST_ABORTED );
+                    goto done;
+                }
+                else if (cbret == PROGRESS_CANCEL)
+                {
+                    BOOLEAN disp = TRUE;
+                    SetFileInformationByHandle( h2, FileDispositionInfo, &disp, sizeof(disp) );
+                    SetLastError( ERROR_REQUEST_ABORTED );
+                    goto done;
+                }
+            }
         }
     }
     ret =  TRUE;
@@ -648,6 +711,106 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateDirectoryExW( LPCWSTR template, LPCWSTR path
     return CreateDirectoryW( path, sa );
 }
 
+#define MAX_BLACKLISTED_FILENAMES 32
+
+static struct
+{
+    const WCHAR *name;
+    size_t name_len;
+}
+blacklist_filenames[MAX_BLACKLISTED_FILENAMES];
+
+static unsigned int blacklist_filename_count;
+
+static BOOL CALLBACK init_file_blacklist(PINIT_ONCE init_once, PVOID parameter, PVOID *context)
+{
+    static WCHAR origin_blacklist[] = L"kernel32.dll;user32.dll";
+
+    const WCHAR separators[] = L",; ";
+    WCHAR *buffer, *token;
+    DWORD size;
+
+    if ((size = GetEnvironmentVariableW(L"WINE_BLACKLIST_FILES", NULL, 0)))
+    {
+        if (!(buffer = heap_alloc(sizeof(*buffer) * size)))
+        {
+            ERR("No memory.\n");
+            return FALSE;
+        }
+
+        if (GetEnvironmentVariableW(L"WINE_BLACKLIST_FILES", buffer, size) != size - 1)
+        {
+            ERR("Error getting WINE_BLACKLIST_FILES env variable.\n");
+            return FALSE;
+        }
+    }
+    else
+    {
+        static const WCHAR *origin_names[] = {
+            L"igoproxy64.exe",
+            L"igoproxy.exe",
+            L"origin.exe",
+            L"easteamproxy.exe"
+        };
+
+        WCHAR cur_exe[MAX_PATH];
+        DWORD cur_exe_len, i;
+
+        if (!(cur_exe_len = GetModuleFileNameW(NULL, cur_exe, ARRAY_SIZE(cur_exe))))
+            return TRUE;
+
+        buffer = NULL;
+
+        for (i = 0; i < ARRAY_SIZE(origin_names); ++i)
+        {
+            DWORD origin_name_len = wcslen(origin_names[i]);
+            if (cur_exe_len >= origin_name_len &&
+                    wcsicmp(cur_exe + cur_exe_len - origin_name_len, origin_names[i]) == 0)
+            {
+                FIXME("using origin file blacklist for %s\n", debugstr_w(cur_exe));
+                buffer = origin_blacklist;
+                break;
+            }
+        }
+
+        if (!buffer)
+            return TRUE;
+    }
+
+    blacklist_filename_count = 0;
+    token = wcstok(buffer, separators);
+    while (token && blacklist_filename_count < MAX_BLACKLISTED_FILENAMES)
+    {
+        FIXME("Blacklisting %s file.\n", debugstr_w(token));
+        blacklist_filenames[blacklist_filename_count].name = token;
+        blacklist_filenames[blacklist_filename_count++].name_len = wcslen(token);
+        token = wcstok(NULL, separators);
+    }
+
+    if (token && blacklist_filename_count == MAX_BLACKLISTED_FILENAMES)
+        ERR("File black list is too long.\n");
+
+    return TRUE;
+}
+
+static BOOL is_file_blacklisted(LPCWSTR filename)
+{
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+    unsigned int i;
+    size_t len;
+
+    if (!InitOnceExecuteOnce(&init_once, init_file_blacklist, NULL, NULL))
+        return FALSE;
+
+    len = wcslen(filename);
+
+    for (i = 0; i < blacklist_filename_count; ++i)
+        if (blacklist_filenames[i].name_len <= len
+                && !wcsicmp(blacklist_filenames[i].name, filename + len - blacklist_filenames[i].name_len))
+            return TRUE;
+
+    return FALSE;
+}
 
 /*************************************************************************
  *	CreateFile2   (kernelbase.@)
@@ -725,7 +888,6 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
         FILE_OVERWRITE      /* TRUNCATE_EXISTING */
     };
 
-
     /* sanity checks */
 
     if (!filename || !filename[0])
@@ -743,6 +905,13 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
            (sharing & FILE_SHARE_WRITE) ? "FILE_SHARE_WRITE " : "",
            (sharing & FILE_SHARE_DELETE) ? "FILE_SHARE_DELETE " : "",
            creation, attributes);
+    
+    if (is_file_blacklisted(filename))
+    {
+        FIXME("\"%s\" is blacklisted.\n", debugstr_w(filename));
+        SetLastError( ERROR_FILE_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
 
     /* Open a console for CONIN$ or CONOUT$ */
 
@@ -1121,6 +1290,7 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     WCHAR *mask;
     BOOL has_wildcard = FALSE;
     FIND_FIRST_INFO *info = NULL;
+    UNICODE_STRING mask_str;
     UNICODE_STRING nt_name;
     OBJECT_ATTRIBUTES attr;
     IO_STATUS_BLOCK io;
@@ -1151,6 +1321,8 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
         SetLastError( ERROR_PATH_NOT_FOUND );
         return INVALID_HANDLE_VALUE;
     }
+
+    RtlInitUnicodeString( &mask_str, NULL );
 
     if (!mask && (device = RtlIsDosDeviceName_U( filename )))
     {
@@ -1185,8 +1357,26 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     }
     else
     {
+        static const WCHAR invalidW[] = { '<', '>', '\"', 0 };
+        DWORD mask_len = lstrlenW( mask );
+
+        /* strip invalid characters from mask */
+        while (mask_len && wcschr( invalidW, mask[mask_len - 1] ))
+            mask_len--;
+
+        if (!mask_len)
+        {
+            has_wildcard = TRUE;
+            RtlInitUnicodeString( &mask_str, L"*?" );
+        }
+        else
+        {
+            has_wildcard = wcspbrk( mask, L"*?" ) != NULL;
+            RtlInitUnicodeString( &mask_str, mask );
+            mask_str.Length = mask_len * sizeof(WCHAR);
+        }
+
         nt_name.Length = (mask - nt_name.Buffer) * sizeof(WCHAR);
-        has_wildcard = wcspbrk( mask, L"*?" ) != NULL;
         size = has_wildcard ? 8192 : max_entry_size;
     }
 
@@ -1247,9 +1437,6 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     }
     else
     {
-        UNICODE_STRING mask_str;
-
-        RtlInitUnicodeString( &mask_str, mask );
         status = NtQueryDirectoryFile( info->handle, 0, NULL, NULL, &io, info->data, info->data_size,
                                        FileBothDirectoryInformation, FALSE, &mask_str, TRUE );
         if (status)

@@ -2746,6 +2746,7 @@ static void wined3d_texture_gl_download_data(struct wined3d_context *context,
     struct wined3d_bo_gl *dst_bo;
     BOOL srgb = FALSE;
     GLenum target;
+    struct wined3d_texture_sub_resource *sub_resource;
 
     TRACE("context %p, src_texture %p, src_sub_resource_idx %u, src_location %s, src_box %s, dst_bo_addr %s, "
             "dst_format %s, dst_x %u, dst_y %u, dst_z %u, dst_row_pitch %u, dst_slice_pitch %u.\n",
@@ -2800,6 +2801,7 @@ static void wined3d_texture_gl_download_data(struct wined3d_context *context,
 
     format_gl = wined3d_format_gl(src_texture->resource.format);
     target = wined3d_texture_gl_get_sub_resource_target(src_texture_gl, src_sub_resource_idx);
+    sub_resource = &src_texture->sub_resources[src_sub_resource_idx];
 
     if ((src_texture->resource.type == WINED3D_RTYPE_TEXTURE_2D
             && (target == GL_TEXTURE_2D_ARRAY || format_gl->f.conv_byte_count
@@ -2831,6 +2833,23 @@ static void wined3d_texture_gl_download_data(struct wined3d_context *context,
 
         GL_EXTCALL(glGetCompressedTexImage(target, src_level, dst_bo_addr->addr));
         checkGLcall("glGetCompressedTexImage");
+    }
+    else if (dst_bo_addr->buffer_object && src_texture->resource.bind_flags & WINED3D_BIND_RENDER_TARGET)
+    {
+        /* PBO texture download is not accelerated on Mesa. Use glReadPixels if possible. */
+        TRACE("Downloading (glReadPixels) texture %p, %u, level %u, format %#x, type %#x, data %p.\n",
+                src_texture, src_sub_resource_idx, src_level, format_gl->format, format_gl->type, dst_bo_addr->addr);
+
+        wined3d_context_gl_apply_fbo_state_blit(context_gl, GL_READ_FRAMEBUFFER, &src_texture->resource, src_sub_resource_idx, NULL,
+                0, sub_resource->locations & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB));
+        wined3d_context_gl_check_fbo_status(context_gl, GL_READ_FRAMEBUFFER);
+        context_invalidate_state(context, STATE_FRAMEBUFFER);
+        gl_info->gl_ops.gl.p_glReadBuffer(GL_COLOR_ATTACHMENT0);
+        checkGLcall("glReadBuffer()");
+
+        gl_info->gl_ops.gl.p_glReadPixels(0, 0, wined3d_texture_get_level_width(src_texture, src_level),
+                wined3d_texture_get_level_height(src_texture, src_level), format_gl->format, format_gl->type, dst_bo_addr->addr);
+        checkGLcall("glReadPixels");
     }
     else
     {
@@ -3503,6 +3522,36 @@ static HRESULT texture_resource_sub_resource_map(struct wined3d_resource *resour
     return WINED3D_OK;
 }
 
+static HRESULT texture_resource_sub_resource_map_info(struct wined3d_resource *resource, unsigned int sub_resource_idx,
+        struct wined3d_map_info *info, DWORD flags)
+{
+    const struct wined3d_format *format = resource->format;
+    struct wined3d_texture_sub_resource *sub_resource;
+    unsigned int fmt_flags = resource->format_flags;
+    struct wined3d_texture *texture;
+    unsigned int texture_level;
+
+    texture = texture_from_resource(resource);
+    if (!(sub_resource = wined3d_texture_get_sub_resource(texture, sub_resource_idx)))
+        return E_INVALIDARG;
+
+    texture_level = sub_resource_idx % texture->level_count;
+
+    if (fmt_flags & WINED3DFMT_FLAG_BROKEN_PITCH)
+    {
+        info->row_pitch = wined3d_texture_get_level_width(texture, texture_level) * format->byte_count;
+        info->slice_pitch = wined3d_texture_get_level_height(texture, texture_level) * info->row_pitch;
+    }
+    else
+    {
+        wined3d_texture_get_pitch(texture, texture_level, &info->row_pitch, &info->slice_pitch);
+    }
+
+    info->size = info->slice_pitch * wined3d_texture_get_level_depth(texture, texture_level);
+
+    return WINED3D_OK;
+}
+
 static HRESULT texture_resource_sub_resource_unmap(struct wined3d_resource *resource, unsigned int sub_resource_idx)
 {
     struct wined3d_texture_sub_resource *sub_resource;
@@ -3555,6 +3604,7 @@ static const struct wined3d_resource_ops texture_resource_ops =
     texture_resource_preload,
     texture_resource_unload,
     texture_resource_sub_resource_map,
+    texture_resource_sub_resource_map_info,
     texture_resource_sub_resource_unmap,
 };
 
@@ -6634,4 +6684,138 @@ void wined3d_vk_blitter_create(struct wined3d_blitter **next)
     blitter->ops = &vk_blitter_ops;
     blitter->next = *next;
     *next = blitter;
+}
+
+void CDECL wined3d_access_gl_texture(struct wined3d_texture *texture,
+        wined3d_gl_texture_callback callback, struct wined3d_texture *depth_texture,
+        const void *data, unsigned int size)
+{
+    struct wined3d_device *device = texture->resource.device;
+
+    TRACE("texture %p, depth_texture %p, callback %p, data %p, size %u.\n", texture, depth_texture, callback, data, size);
+
+    wined3d_cs_emit_gl_texture_callback(device->cs, texture, callback, depth_texture, data, size);
+}
+
+static const struct wined3d_gl_info *wined3d_prepare_vr_gl_context(struct wined3d_device *device)
+{
+    const struct wined3d_adapter *adapter = device->adapter;
+    const struct wined3d_gl_info *gl_info = &adapter->gl_info;
+    struct wined3d_vr_gl_context *ctx = &device->vr_context;
+    PIXELFORMATDESCRIPTOR pfd;
+    int pixel_format;
+    HGLRC share_ctx;
+
+    if (ctx->gl_info)
+        return gl_info;
+
+    TRACE("Creating GL context.\n");
+
+    if (!gl_info->p_wglCreateContextAttribsARB)
+    {
+        ERR("wglCreateContextAttribsARB is not supported.\n");
+        return NULL;
+    }
+
+    if (!gl_info->supported[ARB_SYNC])
+    {
+        FIXME("ARB_sync is not supported.\n");
+        return NULL;
+    }
+
+    ctx->window = CreateWindowA(WINED3D_OPENGL_WINDOW_CLASS_NAME, "WineD3D VR window",
+            WS_OVERLAPPEDWINDOW, 10, 10, 10, 10, NULL, NULL, NULL, NULL);
+    if (!ctx->window)
+    {
+        ERR("Failed to create a window.\n");
+        return NULL;
+    }
+
+    ctx->dc = GetDC(ctx->window);
+    if (!ctx->dc)
+    {
+        ERR("Failed to get a DC.\n");
+        goto fail;
+    }
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_DRAW_TO_WINDOW;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 32;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+
+    if (!(pixel_format = ChoosePixelFormat(ctx->dc, &pfd)))
+    {
+        ERR("Failed to find a suitable pixel format.\n");
+        goto fail;
+    }
+    DescribePixelFormat(ctx->dc, pixel_format, sizeof(pfd), &pfd);
+    SetPixelFormat(ctx->dc, pixel_format, &pfd);
+
+    share_ctx = device->context_count ? wined3d_context_gl(device->contexts[0])->gl_ctx : NULL;
+    if (!(ctx->gl_ctx = context_create_wgl_attribs(gl_info, ctx->dc, share_ctx)))
+    {
+        WARN("Failed to create GL context for VR.\n");
+        goto fail;
+    }
+
+    if (!wglMakeCurrent(ctx->dc, ctx->gl_ctx))
+    {
+        ERR("Failed to make GL context current.\n");
+        goto fail;
+    }
+
+    checkGLcall("create context");
+
+    ctx->gl_info = gl_info;
+    return gl_info;
+
+fail:
+    if (ctx->gl_ctx)
+        wglDeleteContext(ctx->gl_ctx);
+    ctx->gl_ctx = NULL;
+    if (ctx->dc)
+        ReleaseDC(ctx->window, ctx->dc);
+    ctx->dc = NULL;
+    if (ctx->window)
+        DestroyWindow(ctx->window);
+    ctx->window = NULL;
+    return NULL;
+}
+
+void wined3d_destroy_gl_vr_context(struct wined3d_vr_gl_context *ctx)
+{
+    if (!ctx->gl_info)
+        return;
+
+    TRACE("Destroying GL context.\n");
+
+    wglMakeCurrent(NULL, NULL);
+    wglDeleteContext(ctx->gl_ctx);
+    ReleaseDC(ctx->window, ctx->dc);
+    DestroyWindow(ctx->window);
+}
+
+unsigned int CDECL wined3d_get_gl_texture(struct wined3d_texture *texture)
+{
+    struct wined3d_device *device = texture->resource.device;
+    const struct wined3d_gl_info *gl_info;
+    struct wined3d_texture_gl *gl_texture;
+    GLsync fence;
+
+    TRACE("texture %p.\n", texture);
+
+    if (!(gl_info = wined3d_prepare_vr_gl_context(device)))
+        return 0;
+
+    fence = wined3d_cs_synchronize(device->cs, texture);
+    GL_EXTCALL(glWaitSync(fence, 0, GL_TIMEOUT_IGNORED));
+    GL_EXTCALL(glDeleteSync(fence));
+
+    checkGLcall("synchronize CS");
+
+    gl_texture = wined3d_texture_gl(texture);
+    return gl_texture->texture_rgb.name;
 }

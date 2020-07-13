@@ -46,6 +46,7 @@ typedef struct _BASE_DEVICE_EXTENSION {
     ULONG poll_interval;
     WCHAR *device_name;
     UNICODE_STRING link_name;
+    HANDLE link_handle;
     WCHAR device_id[MAX_DEVICE_ID_LEN];
     WCHAR instance_id[MAX_DEVICE_ID_LEN];
     struct ReportRingBuffer *ring_buffer;
@@ -96,7 +97,7 @@ minidriver* find_minidriver(DRIVER_OBJECT* driver) DECLSPEC_HIDDEN;
 
 /* Internal device functions */
 NTSTATUS HID_CreateDevice(DEVICE_OBJECT *native_device, HID_MINIDRIVER_REGISTRATION *driver, DEVICE_OBJECT **device) DECLSPEC_HIDDEN;
-NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device) DECLSPEC_HIDDEN;
+NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device, BOOL xinput_hack) DECLSPEC_HIDDEN;
 void HID_DeleteDevice(DEVICE_OBJECT *device) DECLSPEC_HIDDEN;
 void HID_StartDeviceThread(DEVICE_OBJECT *device) DECLSPEC_HIDDEN;
 

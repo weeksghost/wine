@@ -59,6 +59,9 @@
 @ stub KeSetTimeUpdateNotifyRoutine
 @ stub KefAcquireSpinLockAtDpcLevel
 @ stub KefReleaseSpinLockFromDpcLevel
+@ stdcall KeGenericCallDpc(ptr ptr)
+@ stdcall KeSignalCallDpcSynchronize(ptr)
+@ stdcall KeSignalCallDpcDone(ptr)
 @ stub KiAcquireSpinLock
 @ stub KiReleaseSpinLock
 @ stdcall -fastcall ObfDereferenceObject(ptr)
@@ -180,7 +183,7 @@
 @ stub ExRaiseException
 @ stub ExRaiseHardError
 @ stub ExRaiseStatus
-@ stub ExRegisterCallback
+@ stdcall ExRegisterCallback(ptr ptr ptr)
 @ stub ExReinitializeResourceLite
 @ stdcall ExReleaseResourceForThreadLite(ptr long)
 @ extern ExSemaphoreObjectType
@@ -188,7 +191,7 @@
 @ stdcall ExSetTimerResolution(long long)
 @ stub ExSystemExceptionFilter
 @ stdcall ExSystemTimeToLocalTime(ptr ptr) RtlSystemTimeToLocalTime
-@ stub ExUnregisterCallback
+@ stdcall ExUnregisterCallback(ptr)
 @ stdcall ExUuidCreate(ptr)
 @ stub ExVerifySuite
 @ stub ExWindowStationObjectType
@@ -393,7 +396,7 @@
 @ stub IoGetBootDiskInformation
 @ stdcall IoGetConfigurationInformation()
 @ stdcall IoGetCurrentProcess()
-@ stub IoGetDeviceAttachmentBaseRef
+@ stdcall IoGetDeviceAttachmentBaseRef(ptr)
 @ stub IoGetDeviceInterfaceAlias
 @ stdcall IoGetDeviceInterfaces(ptr ptr long ptr)
 @ stdcall IoGetDeviceObjectPointer(ptr long ptr ptr)
@@ -459,7 +462,7 @@
 @ stub IoReportTargetDeviceChange
 @ stub IoReportTargetDeviceChangeAsynchronous
 @ stub IoRequestDeviceEject
-@ stub IoReuseIrp
+@ stdcall IoReuseIrp(ptr long)
 @ stub IoSetCompletionRoutineEx
 @ stdcall IoSetDeviceInterfaceState(ptr long)
 @ stub IoSetDeviceToVerify
@@ -517,6 +520,7 @@
 @ stub KdEnteredDebugger
 @ stub KdPollBreakIn
 @ stub KdPowerTransition
+@ stdcall KdRefreshDebuggerNotPresent()
 @ stub Ke386CallBios
 @ stdcall Ke386IoSetAccessProcess(ptr long)
 @ stub Ke386QueryIoAccessMap
@@ -586,6 +590,7 @@
 @ stub KeProfileInterruptWithSource
 @ stub KePulseEvent
 @ stdcall KeQueryActiveProcessors()
+@ stdcall KeQueryActiveProcessorCountEx(long)
 @ stdcall KeQueryInterruptTime()
 @ stub KeQueryPriorityThread
 @ stub KeQueryRuntimeThread
@@ -617,6 +622,7 @@
 @ stdcall KeResetEvent(ptr)
 @ stub KeRestoreFloatingPointState
 @ stdcall KeRevertToUserAffinityThread()
+@ stdcall KeRevertToUserAffinityThreadEx(long)
 @ stub KeRundownQueue
 @ stub KeSaveFloatingPointState
 @ stub KeSaveStateForHibernate
@@ -632,15 +638,16 @@
 @ stdcall KeSetPriorityThread(ptr long)
 @ stub KeSetProfileIrql
 @ stdcall KeSetSystemAffinityThread(long)
+@ stdcall KeSetSystemAffinityThreadEx(long)
 @ stdcall KeSetTargetProcessorDpc(ptr long)
 @ stub KeSetTimeIncrement
-@ stub KeSetTimer
+@ stdcall KeSetTimer(ptr int64 ptr)
 @ stdcall KeSetTimerEx(ptr int64 long ptr)
-@ stub KeStackAttachProcess
+@ stdcall KeStackAttachProcess(ptr ptr)
 @ stub KeSynchronizeExecution
 @ stub KeTerminateThread
 @ extern KeTickCount
-@ stub KeUnstackDetachProcess
+@ stdcall KeUnstackDetachProcess(ptr)
 @ stub KeUpdateRunTime
 @ stub KeUpdateSystemTime
 @ stub KeUserModeCallback
@@ -707,7 +714,7 @@
 @ stub MmLockPagableImageSection
 @ stdcall MmLockPagableSectionByHandle(ptr)
 @ stdcall MmMapIoSpace(int64 long long)
-@ stub MmMapLockedPages
+@ stdcall MmMapLockedPages(ptr long)
 @ stdcall MmMapLockedPagesSpecifyCache(ptr long long ptr long long)
 @ stub MmMapLockedPagesWithReservedMapping
 @ stub MmMapMemoryDumpMdl
@@ -896,7 +903,7 @@
 @ stub PsGetProcessJob
 @ stub PsGetProcessPeb
 @ stub PsGetProcessPriorityClass
-@ stub PsGetProcessSectionBaseAddress
+@ stdcall PsGetProcessSectionBaseAddress(ptr)
 @ stub PsGetProcessSecurityPort
 @ stub PsGetProcessSessionId
 @ stub PsGetProcessWin32Process
@@ -1194,6 +1201,7 @@
 @ stdcall RtlQueryInformationAcl(ptr ptr long long)
 @ stdcall RtlQueryPackageIdentity(long ptr ptr ptr ptr ptr)
 @ stdcall RtlQueryRegistryValues(long ptr ptr ptr ptr)
+@ stdcall RtlQueryRegistryValuesEx(long ptr ptr ptr ptr) RtlQueryRegistryValues
 @ stdcall RtlQueryTimeZoneInformation(ptr)
 @ stdcall -norelay RtlRaiseException(ptr)
 @ stdcall RtlRaiseStatus(long)

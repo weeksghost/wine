@@ -147,7 +147,7 @@ static cookie_domain_t *get_cookie_domain(substr_t domain, BOOL create)
 
 static WCHAR *create_cookie_url(substr_t domain, substr_t path, substr_t *ret_path)
 {
-    WCHAR user[UNLEN], *p, *url;
+    WCHAR user[UNLEN + 1], *p, *url;
     DWORD len, user_len, i;
 
     static const WCHAR cookie_prefix[] = {'C','o','o','k','i','e',':'};

@@ -433,6 +433,15 @@ static BOOL X11DRV_InitAdapter(HKEY video_hkey, INT video_index, INT gpu_index, 
     if (RegSetValueExW(video_hkey, key_nameW, 0, REG_SZ, (const BYTE *)bufferW, (strlenW(bufferW) + 1) * sizeof(WCHAR)))
         goto done;
 
+    i = 1;
+    if (RegSetValueExW(video_hkey, u"MaxObjectNumber", 0, REG_DWORD, (const BYTE *)&i, sizeof(i)))
+        goto done;
+
+    i = 0;
+    if (RegSetValueExW(video_hkey, u"ObjectNumberList", 0, REG_BINARY, (const BYTE *)&i, sizeof(i)))
+        goto done;
+
+
     /* Create HKLM\System\CurrentControlSet\Control\Video\{GPU GUID}\{Adapter Index} link to GPU driver */
     ls = RegCreateKeyExW(HKEY_LOCAL_MACHINE, adapter_keyW, 0, NULL, REG_OPTION_VOLATILE | REG_OPTION_CREATE_LINK,
                          KEY_ALL_ACCESS, NULL, &hkey, NULL);
