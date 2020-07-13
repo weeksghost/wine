@@ -528,6 +528,7 @@ struct process *create_process( int fd, struct process *parent, int inherit_all,
     process->is_system       = 0;
     process->debug_children  = 1;
     process->is_terminating  = 0;
+    process->is_kernel       = 0;
     process->job             = NULL;
     process->console         = NULL;
     process->startup_state   = STARTUP_IN_PROGRESS;
@@ -1182,6 +1183,7 @@ DECL_HANDLER(new_process)
     struct process *parent;
     struct thread *parent_thread = current;
     int socket_fd = thread_get_inflight_fd( current, req->socket_fd );
+    struct stat winedevice_st, exe_st;
 
     if (socket_fd == -1)
     {
@@ -1319,6 +1321,10 @@ DECL_HANDLER(new_process)
     if (req->exe_file &&
         !(process->exe_file = get_file_obj( current->process, req->exe_file, FILE_READ_DATA )))
         goto done;
+
+    if (process->exe_file && !fstatat(config_dir_fd, "drive_c/windows/system32/winedevice.exe", &winedevice_st, 0))
+        if (!fstat( get_file_unix_fd(process->exe_file), &exe_st) && winedevice_st.st_ino == exe_st.st_ino && winedevice_st.st_dev == exe_st.st_dev)
+            process->is_kernel = 1;
 
     if (parent->job
        && !(req->create_flags & CREATE_BREAKAWAY_FROM_JOB)
