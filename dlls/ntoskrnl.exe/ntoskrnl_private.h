@@ -59,6 +59,7 @@ struct _EPROCESS
     PVOID section_base_address;
     CHAR image_file_name[16];
     LONGLONG create_time;
+    BOOL wow64;
 };
 
 struct _KTHREAD
