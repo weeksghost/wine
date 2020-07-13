@@ -1679,6 +1679,24 @@ static inline BOOL is_inside_signal_stack( void *ptr )
             (char *)ptr < (char *)get_signal_stack() + signal_stack_size);
 }
 
+static int ymm_offset = -1;
+static int ymm_length = -1;
+void get_ymm_information(void)
+{
+    int eax = 0x0D, ebx, ecx = 0x02, edx;
+
+    if (ymm_offset != -1)
+        return;
+
+    __asm("cpuid"
+        : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
+        : "0" (eax), "2" (ecx)
+    );
+
+    ymm_offset = ebx;
+    ymm_length = eax;
+}
+
 /***********************************************************************
  *           save_context
  *
@@ -1736,6 +1754,12 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
         context->u.FltSave = *FPU_sig(sigcontext);
         context->MxCsr = context->u.FltSave.MxCsr;
     }
+    get_ymm_information();
+    if (ymm_offset != -1)
+    {
+        memcpy(context->VectorRegister, (BYTE*)sigcontext + ymm_offset, ymm_length);
+        context->ContextFlags |= CONTEXT_XSTATE;
+    }
 }
 
 
@@ -1754,6 +1778,9 @@ static void restore_context( const CONTEXT *context, ucontext_t *sigcontext )
     amd64_thread_data()->dr7 = context->Dr7;
     set_sigcontext( context, sigcontext );
     if (FPU_sig(sigcontext)) *FPU_sig(sigcontext) = context->u.FltSave;
+    get_ymm_information();
+    if (ymm_offset != -1 && context->ContextFlags & CONTEXT_XSTATE)
+        memcpy((BYTE*)sigcontext + ymm_offset, context->VectorRegister, ymm_length);
 }
 
 
