@@ -4015,6 +4015,7 @@ void WINAPI LdrInitializeThunk( CONTEXT *context, void **entry, ULONG_PTR unknow
     wm = get_modref( NtCurrentTeb()->Peb->ImageBaseAddress );
     assert( wm );
 
+    NtDelayExecution( TRUE, &zero );
     if (!imports_fixup_done)
     {
         actctx_init();
