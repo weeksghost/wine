@@ -626,8 +626,8 @@ void flush_emulated_memory(void)
 {
     //LARGE_INTEGER li = {.QuadPart = -10000};
     //NtDelayExecution(TRUE, &li);
-
-    memcpy(KeGetCurrentThread()->user_output_copy, KeGetCurrentThread()->user_output, HeapSize( GetProcessHeap(), 0, KeGetCurrentThread()->user_output_copy ));
+    if (KeGetCurrentThread()->user_output_copy)
+        memcpy(KeGetCurrentThread()->user_output_copy, KeGetCurrentThread()->user_output, HeapSize( GetProcessHeap(), 0, KeGetCurrentThread()->user_output_copy ));
 }
 
 struct kernel_struct
