@@ -426,52 +426,7 @@ static int check_process_write_access( struct thread *thread, long *addr, data_s
 }
 
 /* write data to a process memory space */
-#if defined(linux) && defined(HAVE_SYS_UIO_H)
-int write_process_memory_ptrace( struct process *process, client_ptr_t ptr, data_size_t size, const char *src );
 int write_process_memory( struct process *process, client_ptr_t ptr, data_size_t size, const char *src )
-{
-    static int have_process_vm_writev = -1;
-    struct iovec local_iov, remote_iov;
-    int bytes_written;
-
-    if (have_process_vm_writev == 0)
-        return write_process_memory_ptrace( process, ptr, size, src );
-        
-    if (!get_ptrace_thread( process )) return 0;
-
-    if ((unsigned long)ptr != ptr) /* Not sure what this is for? */
-    {
-        set_error( STATUS_ACCESS_DENIED );
-        return 0;
-    }
-
-    if ((size_t)size != size)
-    {
-        set_error( STATUS_ACCESS_DENIED );
-        return 0;
-    }
-
-    local_iov.iov_base  = (void*)src;
-    local_iov.iov_len   = (size_t)size;
-    remote_iov.iov_base = (void*)ptr;
-    remote_iov.iov_len  = (size_t)size;
-
-    errno = 0;
-    bytes_written = process_vm_writev(process->unix_pid, &local_iov, 1, &remote_iov, 1, 0);
-    if (errno == ENOSYS)
-    {
-        have_process_vm_writev = 0;
-        return write_process_memory_ptrace( process, ptr, size, src );
-    }
-    if (bytes_written !=size)
-        return write_process_memory_ptrace( process, ptr, size, src );
-
-    return bytes_written == size;
-}
-int write_process_memory_ptrace( struct process *process, client_ptr_t ptr, data_size_t size, const char *src )
-#else
-int write_process_memory( struct process *process, client_ptr_t ptr, data_size_t size, const char *src )
-#endif
 {
     struct thread *thread = get_ptrace_thread( process );
     int ret = 0;
