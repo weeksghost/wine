@@ -321,6 +321,10 @@ static enum event_merge_action merge_raw_motion_events( XIRawEvent *prev, XIRawE
  */
 static enum event_merge_action merge_events( XEvent *prev, XEvent *next )
 {
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
+    struct x11drv_thread_data *thread_data = x11drv_thread_data();
+#endif
+
     switch (prev->type)
     {
     case ConfigureNotify:
@@ -352,19 +356,21 @@ static enum event_merge_action merge_events( XEvent *prev, XEvent *next )
         case GenericEvent:
             if (next->xcookie.extension != xinput2_opcode) break;
             if (next->xcookie.evtype != XI_RawMotion) break;
-            if (x11drv_thread_data()->warp_serial) break;
+            if (thread_data->xi2_rawinput_only) break;
+            if (thread_data->warp_serial) break;
             return MERGE_KEEP;
         }
         break;
     case GenericEvent:
         if (prev->xcookie.extension != xinput2_opcode) break;
         if (prev->xcookie.evtype != XI_RawMotion) break;
+        if (thread_data->xi2_rawinput_only) break;
         switch (next->type)
         {
         case GenericEvent:
             if (next->xcookie.extension != xinput2_opcode) break;
             if (next->xcookie.evtype != XI_RawMotion) break;
-            if (x11drv_thread_data()->warp_serial) break;
+            if (thread_data->warp_serial) break;
             return merge_raw_motion_events( prev->xcookie.data, next->xcookie.data );
 #endif
         }
@@ -596,12 +602,26 @@ static void set_input_focus( struct x11drv_win_data *data )
  */
 static void set_focus( Display *display, HWND hwnd, Time time )
 {
-    HWND focus;
+    HWND focus, old_active;
     Window win;
     GUITHREADINFO threadinfo;
 
+    old_active = GetForegroundWindow();
+
+    /* prevent recursion */
+    x11drv_thread_data()->active_window = hwnd;
+
     TRACE( "setting foreground window to %p\n", hwnd );
     SetForegroundWindow( hwnd );
+
+    /* Some applications expect that a being deactivated topmost window
+     * receives the WM_WINDOWPOSCHANGING/WM_WINDOWPOSCHANGED messages,
+     * and perform some specific actions. Chessmaster is one of such apps.
+     * Window Manager keeps a topmost window on top in z-oder, so there is
+     * no need to actually do anything, just send the messages.
+     */
+    if (old_active && (GetWindowLongW( old_active, GWL_EXSTYLE ) & WS_EX_TOPMOST))
+        SetWindowPos( old_active, hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER );
 
     threadinfo.cbSize = sizeof(threadinfo);
     GetGUIThreadInfo(0, &threadinfo);
@@ -773,6 +793,13 @@ static BOOL X11DRV_FocusIn( HWND hwnd, XEvent *xev )
     TRACE( "win %p xwin %lx detail=%s mode=%s\n", hwnd, event->window, focus_details[event->detail], focus_modes[event->mode] );
 
     if (event->detail == NotifyPointer) return FALSE;
+
+    if (is_virtual_desktop() && event->window == root_window && event->detail != NotifyInferior)
+    {
+        TRACE( "Virtual desktop gained focus, enabling XInput2.\n" );
+        X11DRV_XInput2_Enable();
+    }
+
     if (hwnd == GetDesktopWindow()) return FALSE;
 
     switch (event->mode)
@@ -847,6 +874,8 @@ static void focus_out( Display *display , HWND hwnd )
 
     if (!focus_win)
     {
+        x11drv_thread_data()->active_window = 0;
+
         /* Abey : 6-Oct-99. Check again if the focus out window is the
            Foreground window, because in most cases the messages sent
            above must have already changed the foreground window, in which
@@ -875,6 +904,13 @@ static BOOL X11DRV_FocusOut( HWND hwnd, XEvent *xev )
         if (!hwnd && event->window == x11drv_thread_data()->clip_window) reset_clipping_window();
         return TRUE;
     }
+
+    if (is_virtual_desktop() && event->window == root_window && event->detail != NotifyInferior)
+    {
+        TRACE( "Virtual desktop lost focus, disabling XInput2.\n" );
+        X11DRV_XInput2_Disable();
+    }
+
     if (!hwnd) return FALSE;
 
     switch (event->mode)
@@ -985,6 +1021,7 @@ static BOOL X11DRV_Expose( HWND hwnd, XEvent *xev )
 static BOOL X11DRV_MapNotify( HWND hwnd, XEvent *event )
 {
     struct x11drv_win_data *data;
+    BOOL is_embedded;
 
     if (event->xany.window == x11drv_thread_data()->clip_window) return TRUE;
 
@@ -996,7 +1033,12 @@ static BOOL X11DRV_MapNotify( HWND hwnd, XEvent *event )
         if (hwndFocus && IsChild( hwnd, hwndFocus ))
             set_input_focus( data );
     }
+
+    is_embedded = data->embedded;
     release_win_data( data );
+
+    if (is_embedded)
+        EnableWindow( hwnd, TRUE );
     return TRUE;
 }
 
@@ -1006,6 +1048,17 @@ static BOOL X11DRV_MapNotify( HWND hwnd, XEvent *event )
  */
 static BOOL X11DRV_UnmapNotify( HWND hwnd, XEvent *event )
 {
+    struct x11drv_win_data *data;
+    BOOL is_embedded;
+
+    if (!(data = get_win_data( hwnd ))) return FALSE;
+
+    is_embedded = data->embedded;
+    release_win_data( data );
+
+    if (is_embedded)
+        EnableWindow( hwnd, FALSE );
+
     return TRUE;
 }
 
@@ -1315,8 +1368,6 @@ static void handle_wm_state_notify( HWND hwnd, XPropertyEvent *event, BOOL updat
             {
                 TRACE( "restoring win %p/%lx\n", data->hwnd, data->whole_window );
                 release_win_data( data );
-                if ((style & (WS_MINIMIZE | WS_VISIBLE)) == (WS_MINIMIZE | WS_VISIBLE))
-                    SetActiveWindow( hwnd );
                 SendMessageW( hwnd, WM_SYSCOMMAND, SC_RESTORE, 0 );
                 return;
             }

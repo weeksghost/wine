@@ -26,6 +26,9 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
+#ifdef HAVE_PRCTL
+#include <sys/prctl.h>
+#endif
 
 #define NONAMELESSUNION
 #define NONAMELESSSTRUCT
@@ -120,6 +123,16 @@ void wait_suspend( CONTEXT *context )
 }
 
 
+/* "How to: Set a Thread Name in Native Code"
+ * https://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx */
+typedef struct tagTHREADNAME_INFO
+{
+   DWORD   dwType;     /* Must be 0x1000 */
+   LPCSTR  szName;     /* Pointer to name - limited to 9 bytes (8 characters + terminator) */
+   DWORD   dwThreadID; /* Thread ID (-1 = caller thread) */
+   DWORD   dwFlags;    /* Reserved for future use.  Must be zero. */
+} THREADNAME_INFO;
+
 /**********************************************************************
  *           send_debug_event
  *
@@ -141,6 +154,21 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, int first_chance, CONTEXT *con
 
     for (i = 0; i < min( rec->NumberParameters, EXCEPTION_MAXIMUM_PARAMETERS ); i++)
         params[i] = rec->ExceptionInformation[i];
+
+    if (rec->ExceptionCode == 0x406d1388)
+    {
+        const THREADNAME_INFO *threadname = (const THREADNAME_INFO *)rec->ExceptionInformation;
+
+        if (threadname->dwThreadID == -1)
+        {
+#ifdef HAVE_PRCTL
+#ifndef PR_SET_NAME
+# define PR_SET_NAME 15
+#endif
+            prctl( PR_SET_NAME, threadname->szName );
+#endif
+        }
+    }
 
     SERVER_START_REQ( queue_exception_event )
     {
@@ -303,7 +331,6 @@ LONG WINAPI call_unhandled_exception_filter( PEXCEPTION_POINTERS eptr )
     if (!unhandled_exception_filter) return EXCEPTION_CONTINUE_SEARCH;
     return unhandled_exception_filter( eptr );
 }
-
 
 #if defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
 
@@ -642,6 +669,16 @@ PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry( ULONG_PTR pc, ULONG_PTR *base,
 }
 
 #endif  /* __x86_64__ || __arm__ || __aarch64__ */
+
+/*********************************************************************
+ *         NtContinue   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtContinue( CONTEXT *context, BOOLEAN alert )
+{
+    TRACE( "(%p, %d) stub!\n", context, alert );
+
+    return NtSetContextThread( GetCurrentThread(), context );
+}
 
 /*************************************************************
  *            __wine_spec_unimplemented_stub

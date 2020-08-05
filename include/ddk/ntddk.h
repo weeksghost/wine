@@ -118,7 +118,11 @@ typedef struct _IMAGE_INFO
             ULONG SystemModeImage      : 1;
             ULONG ImageMappedToAllPids : 1;
             ULONG ExtendedInfoPresent  : 1;
-            ULONG Reserved             : 21;
+            ULONG MachineTypeMismatch : 1;
+            ULONG ImageSignatureLevel : 4;
+            ULONG ImageSignatureType : 3;
+            ULONG ImagePartialMap : 1;
+            ULONG Reserved : 12;
         } DUMMYSTRUCTNAME;
     } DUMMYUNIONNAME;
     PVOID  ImageBase;

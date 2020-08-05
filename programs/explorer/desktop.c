@@ -22,6 +22,8 @@
 #include <stdio.h>
 
 #define COBJMACROS
+#define NONAMELESSUNION
+#define NONAMELESSSTRUCT
 #define OEMRESOURCE
 #include <windows.h>
 #include <rpc.h>
@@ -790,6 +792,11 @@ static BOOL get_default_enable_shell( const WCHAR *name )
 
 static HMODULE load_graphics_driver( const WCHAR *driver, const GUID *guid )
 {
+    static const WCHAR video_keyW[] = {
+        'S','y','s','t','e','m','\\',
+        'C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
+        'C','o','n','t','r','o','l','\\',
+        'V','i','d','e','o',0};
     static const WCHAR device_keyW[] = {
         'S','y','s','t','e','m','\\',
         'C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
@@ -861,6 +868,10 @@ static HMODULE load_graphics_driver( const WCHAR *driver, const GUID *guid )
         TRACE( "display %s driver %s\n", debugstr_guid(guid), debugstr_w(buffer) );
     }
 
+    /* create video key first without REG_OPTION_VOLATILE attribute */
+    if (!RegCreateKeyExW( HKEY_LOCAL_MACHINE, video_keyW, 0, NULL, 0, KEY_SET_VALUE, NULL, &hkey, NULL ))
+        RegCloseKey( hkey );
+
     swprintf( key, ARRAY_SIZE(key), device_keyW, guid->Data1, guid->Data2, guid->Data3,
               guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
               guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7] );
@@ -881,16 +892,31 @@ static HMODULE load_graphics_driver( const WCHAR *driver, const GUID *guid )
 
 static void initialize_display_settings(void)
 {
+    DISPLAY_DEVICEW ddW;
     DEVMODEW dmW;
+    DWORD i = 0;
 
     /* Store current display mode in the registry */
-    if (EnumDisplaySettingsExW( NULL, ENUM_CURRENT_SETTINGS, &dmW, 0 ))
+    ddW.cb = sizeof(ddW);
+    dmW.dmSize = sizeof(dmW);
+    while (EnumDisplayDevicesW( NULL, i++, &ddW, 0 ))
     {
-        WINE_TRACE( "Current display mode %ux%u %u bpp %u Hz\n", dmW.dmPelsWidth,
-                    dmW.dmPelsHeight, dmW.dmBitsPerPel, dmW.dmDisplayFrequency );
-        ChangeDisplaySettingsExW( NULL, &dmW, 0,
-                                  CDS_GLOBAL | CDS_NORESET | CDS_UPDATEREGISTRY,
-                                  NULL );
+        if (!EnumDisplaySettingsExW( ddW.DeviceName, ENUM_CURRENT_SETTINGS, &dmW, 0))
+        {
+            WINE_ERR( "Failed to query current display settings for %s.\n",
+                      wine_dbgstr_w( ddW.DeviceName ) );
+            continue;
+        }
+
+        WINE_TRACE( "Device %s current display mode %ux%u %uBits %uHz at %d,%d.\n",
+                    wine_dbgstr_w( ddW.DeviceName ), dmW.dmPelsWidth, dmW.dmPelsHeight,
+                    dmW.dmBitsPerPel, dmW.dmDisplayFrequency, dmW.u1.s2.dmPosition.x,
+                    dmW.u1.s2.dmPosition.y );
+
+        if (ChangeDisplaySettingsExW( ddW.DeviceName, &dmW, 0,
+                                      CDS_GLOBAL | CDS_NORESET | CDS_UPDATEREGISTRY, 0 ))
+            WINE_ERR( "Failed to initialize registry display settings for %s.\n",
+                       wine_dbgstr_w( ddW.DeviceName ) );
     }
 }
 

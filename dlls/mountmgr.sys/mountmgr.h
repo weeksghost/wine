@@ -51,7 +51,7 @@ enum device_type
 };
 
 extern NTSTATUS add_volume( const char *udi, const char *device, const char *mount_point,
-                            enum device_type type, const GUID *guid ) DECLSPEC_HIDDEN;
+                            enum device_type type, const GUID *guid, const char *disk_serial ) DECLSPEC_HIDDEN;
 extern NTSTATUS remove_volume( const char *udi ) DECLSPEC_HIDDEN;
 extern NTSTATUS add_dos_device( int letter, const char *udi, const char *device,
                                 const char *mount_point, enum device_type type, const GUID *guid,
@@ -107,7 +107,6 @@ extern struct mount_point *add_dosdev_mount_point( DEVICE_OBJECT *device, UNICOD
 extern struct mount_point *add_volume_mount_point( DEVICE_OBJECT *device, UNICODE_STRING *device_name,
                                                    const GUID *guid ) DECLSPEC_HIDDEN;
 extern void delete_mount_point( struct mount_point *mount ) DECLSPEC_HIDDEN;
-extern void set_mount_point_id( struct mount_point *mount, const void *id, unsigned int id_len ) DECLSPEC_HIDDEN;
-
+extern void set_mount_point_id( struct mount_point *mount, const void *id, unsigned int id_len, int drive ) DECLSPEC_HIDDEN;
 extern ULONG get_dhcp_request_param( const WCHAR *adapter, struct mountmgr_dhcp_request_param *param, char *buf,
                                      ULONG offset, ULONG size ) DECLSPEC_HIDDEN;

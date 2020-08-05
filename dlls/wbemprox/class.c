@@ -116,6 +116,7 @@ static HRESULT WINAPI enum_class_object_Next(
     struct table *table;
     static int once = 0;
     HRESULT hr;
+    ULONG i;
 
     TRACE("%p, %d, %u, %p, %p\n", iface, lTimeout, uCount, apObjects, puReturned);
 
@@ -124,16 +125,18 @@ static HRESULT WINAPI enum_class_object_Next(
     if (lTimeout != WBEM_INFINITE && !once++) FIXME("timeout not supported\n");
 
     *puReturned = 0;
-    if (ec->index >= view->result_count) return WBEM_S_FALSE;
+    
+    for (i=0; i<uCount; ++i)
+    {
+        if (ec->index >= view->result_count) return WBEM_S_FALSE;
+        table = get_view_table( view, ec->index );
+        hr = create_class_object( table->name, iface, ec->index, NULL, apObjects );
+        if (hr != S_OK) return hr;
 
-    table = get_view_table( view, ec->index );
-    hr = create_class_object( table->name, iface, ec->index, NULL, apObjects );
-    if (hr != S_OK) return hr;
-
-    ec->index++;
-    *puReturned = 1;
-    if (ec->index == view->result_count && uCount > 1) return WBEM_S_FALSE;
-    if (uCount > 1) return WBEM_S_TIMEDOUT;
+        apObjects++;
+        ec->index++;
+        ++*puReturned;
+    }
     return WBEM_S_NO_ERROR;
 }
 
@@ -344,6 +347,7 @@ static HRESULT WINAPI class_object_GetQualifierSet(
     return WbemQualifierSet_create( co->name, NULL, (void **)ppQualSet );
 }
 
+
 static HRESULT record_get_value( const struct record *record, UINT index, VARIANT *var, CIMTYPE *type )
 {
     VARTYPE vartype = to_vartype( record->fields[index].type & CIM_TYPE_MASK );
@@ -361,7 +365,13 @@ static HRESULT record_get_value( const struct record *record, UINT index, VARIAN
     case CIM_STRING:
     case CIM_DATETIME:
     case CIM_REFERENCE:
-        V_BSTR( var ) = SysAllocString( record->fields[index].u.sval );
+        if (!record->fields[index].u.sval)
+        {
+            V_BSTR( var ) = NULL;
+            FIXME("sval is NULL\n");
+        }
+        else
+            V_BSTR( var ) = SysAllocString( record->fields[index].u.sval );
         break;
     case CIM_SINT32:
         V_I4( var ) = record->fields[index].u.ival;

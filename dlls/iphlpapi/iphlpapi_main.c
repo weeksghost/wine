@@ -742,6 +742,8 @@ DWORD WINAPI GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
               }
               /* Find first router through this interface, which we'll assume
                * is the default gateway for this adapter */
+              strcpy(ptr->GatewayList.IpAddress.String, "0.0.0.0");
+              strcpy(ptr->GatewayList.IpMask.String, "255.255.255.255");
               for (i = 0; i < routeTable->dwNumEntries; i++)
                 if (routeTable->table[i].dwForwardIfIndex == ptr->Index
                  && routeTable->table[i].u1.ForwardType ==
@@ -2861,7 +2863,7 @@ DWORD WINAPI NotifyUnicastIpAddressChange(ADDRESS_FAMILY family, PUNICAST_IPADDR
 {
     FIXME("(family %d, callback %p, context %p, init_notify %d, handle %p): semi-stub\n",
           family, callback, context, init_notify, handle);
-    if (handle) *handle = NULL;
+    if (handle) *handle = INVALID_HANDLE_VALUE;
 
     if (init_notify)
         callback(context, NULL, MibInitialNotification);
@@ -3384,8 +3386,44 @@ DWORD WINAPI GetIpNetTable2(ADDRESS_FAMILY family, PMIB_IPNET_TABLE2 *table)
  */
 DWORD WINAPI GetIpInterfaceTable(ADDRESS_FAMILY family, PMIB_IPINTERFACE_TABLE *table)
 {
-    FIXME("(%u %p): stub\n", family, table);
-    return ERROR_NOT_SUPPORTED;
+    PMIB_IF_TABLE2 if_table2;
+    ULONG size;
+    ULONG i;
+    DWORD status;
+
+    FIXME("(%u %p): semi-stub\n", family, table);
+
+    if (!table || (family != AF_INET && family != AF_INET6 && family != AF_UNSPEC))
+        return ERROR_INVALID_PARAMETER;
+    size = sizeof(MIB_IFTABLE);
+    if (family != AF_INET)
+    {
+        if (!(*table = HeapAlloc( GetProcessHeap(), 0, size )))
+            return ERROR_OUTOFMEMORY;
+        return NO_ERROR;
+    }
+    if ((status = GetIfTable2Ex( MibIfTableNormal, &if_table2 )) != NO_ERROR)
+        return status;
+    if (if_table2->NumEntries > 1)
+      size += (if_table2->NumEntries - 1) * sizeof(MIB_IPINTERFACE_ROW);
+    if (!(*table = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, size )))
+        return ERROR_OUTOFMEMORY;
+    (*table)->NumEntries = if_table2->NumEntries;
+    for (i = 0; i < (*table)->NumEntries; i++) {
+        (*table)->Table[i].Family = AF_INET;
+        (*table)->Table[i].InterfaceLuid = if_table2->Table[i].InterfaceLuid;
+        (*table)->Table[i].InterfaceIndex = if_table2->Table[i].InterfaceIndex;
+        (*table)->Table[i].RouterDiscoveryBehavior = RouterDiscoveryDhcp;
+        (*table)->Table[i].DadTransmits = 3;
+        (*table)->Table[i].BaseReachableTime = 30000;
+        (*table)->Table[i].RetransmitTime = 1000;
+        (*table)->Table[i].LinkLocalAddressBehavior = LinkLocalDelayed;
+        (*table)->Table[i].NlMtu = if_table2->Table[i].Mtu;
+        if (if_table2->Table[i].AdminStatus == NET_IF_ADMIN_STATUS_UP)
+            (*table)->Table[i].Connected = 1;
+    }
+    HeapFree( GetProcessHeap(), 0, if_table2 );
+    return NO_ERROR;
 }
 
 /******************************************************************

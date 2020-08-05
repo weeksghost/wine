@@ -411,6 +411,37 @@ void WINAPI KeInitializeTimer( KTIMER *timer )
     KeInitializeTimerEx(timer, NotificationTimer);
 }
 
+/*static void WINAPI ke_timer_complete_proc(LPVOID _dpc, DWORD timer_low, DWORD timer_high)
+{
+    KDPC *dpc = _dpc;
+
+    TRACE("dpc %p, timer_low %#x, timer_high %p.\n", dpc, timer_low, timer_high);
+
+    if (dpc && dpc->DeferredRoutine)
+    {
+        TRACE("Calling dpc->DeferredRoutine %p.\n", dpc->DeferredRoutine);
+        dpc->DeferredRoutine(dpc, dpc->DeferredContext, dpc->SystemArgument1, dpc->SystemArgument2);
+    }
+}*/
+
+VOID CALLBACK ke_timer_complete_proc(PTP_CALLBACK_INSTANCE Instance,  PVOID _dpc, PTP_TIMER Timer)
+{
+    KDPC *dpc = _dpc;
+
+    TRACE("Instance %p, dpc %p, Timer %p.\n", Instance, dpc, Timer);
+
+    if (dpc)
+        dpc->SystemArgument1 = NULL;
+
+    if (dpc && dpc->DeferredRoutine)
+    {
+        TRACE("Calling dpc->DeferredRoutine %p, dpc->DeferredContext %p.\n", dpc->DeferredRoutine, dpc->DeferredContext);
+        dpc->DeferredRoutine(dpc, dpc->DeferredContext, dpc->SystemArgument1, dpc->SystemArgument2);
+    }
+
+    CloseThreadpoolTimer(Timer);
+}
+
 /***********************************************************************
  *           KeSetTimerEx (NTOSKRNL.EXE.@)
  */
@@ -421,18 +452,30 @@ BOOLEAN WINAPI KeSetTimerEx( KTIMER *timer, LARGE_INTEGER duetime, LONG period, 
     TRACE("timer %p, duetime %s, period %d, dpc %p.\n",
         timer, wine_dbgstr_longlong(duetime.QuadPart), period, dpc);
 
-    if (dpc)
-    {
-        FIXME("Unhandled DPC %p.\n", dpc);
-        return FALSE;
-    }
-
     EnterCriticalSection( &sync_cs );
 
     ret = timer->Header.Inserted;
     timer->Header.Inserted = TRUE;
     timer->Header.WaitListHead.Blink = CreateWaitableTimerW( NULL, timer->Header.Type == TYPE_MANUAL_TIMER, NULL );
-    SetWaitableTimer( timer->Header.WaitListHead.Blink, &duetime, period, NULL, NULL, FALSE );
+    if (!timer->Header.WaitListHead.Blink)
+        ERR("Could not create waitable timer, GetLastError() %u.\n", GetLastError());
+
+
+    if (!SetWaitableTimer( timer->Header.WaitListHead.Blink, &duetime, period, NULL, NULL, FALSE ))
+        ERR("Could not set waitable timer, GetLastError() %u.\n", GetLastError());
+
+    if (dpc)
+    {
+        PTP_TIMER ptp;
+
+        dpc->SystemArgument1 = ptp = CreateThreadpoolTimer(ke_timer_complete_proc, dpc, NULL);
+        timer->Dpc = dpc;
+
+        if (!ptp)
+            ERR("CreateThreadpoolTimer() failed, GetLastError() %u.\n", GetLastError());
+
+        SetThreadpoolTimer(ptp, (FILETIME *)&duetime, period, 0);
+    }
 
     LeaveCriticalSection( &sync_cs );
 
@@ -446,6 +489,12 @@ BOOLEAN WINAPI KeCancelTimer( KTIMER *timer )
     TRACE("timer %p.\n", timer);
 
     EnterCriticalSection( &sync_cs );
+    if (timer->Dpc && timer->Dpc->SystemArgument1)
+    {
+        CloseThreadpoolTimer(timer->Dpc->SystemArgument1);
+        timer->Dpc->SystemArgument1 = NULL;
+    }
+
     ret = timer->Header.Inserted;
     timer->Header.Inserted = FALSE;
     CloseHandle(timer->Header.WaitListHead.Blink);
@@ -1257,4 +1306,11 @@ void WINAPI IoReleaseRemoveLockAndWaitEx( IO_REMOVE_LOCK *lock, void *tag, ULONG
         ERR("Lock %p is not acquired!\n", lock);
     else if (count > 0)
         KeWaitForSingleObject( &lock->Common.RemoveEvent, Executive, KernelMode, FALSE, NULL );
+}
+
+BOOLEAN WINAPI KeSetTimer(PKTIMER Timer, LARGE_INTEGER DueTime, PKDPC Dpc)
+{
+    TRACE("Timer %p, DueTime %I64x, Dpc %p.\n", Timer, DueTime.QuadPart, Dpc);
+
+    return KeSetTimerEx( Timer, DueTime, 0, Dpc );
 }

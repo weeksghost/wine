@@ -144,6 +144,8 @@ static const struct object_ops sock_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     sock_signaled,                /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     sock_get_fd,                  /* get_fd */
@@ -959,6 +961,8 @@ static const struct object_ops ifchange_ops =
     add_queue,               /* add_queue */
     NULL,                    /* remove_queue */
     NULL,                    /* signaled */
+    NULL,                    /* get_esync_fd */
+    NULL,                    /* get_fsync_idx */
     no_satisfied,            /* satisfied */
     no_signal,               /* signal */
     ifchange_get_fd,         /* get_fd */
@@ -1331,6 +1335,16 @@ DECL_HANDLER(get_socket_info)
     reply->family   = sock->family;
     reply->type     = sock->type;
     reply->protocol = sock->proto;
+    reply->connect_time = -(current_time - sock->connect_time);
 
     release_object( &sock->obj );
+}
+
+DECL_HANDLER(socket_cleanup)
+{
+    unsigned int index = 0;
+    obj_handle_t sock;
+
+    while ((sock = enumerate_handles(current->process, &sock_ops, &index)))
+        close_handle(current->process, sock);
 }

@@ -636,6 +636,7 @@ static ULONG get_full_path_helper(LPCWSTR name, LPWSTR buffer, ULONG size)
     LPCWSTR                     ptr;
     const UNICODE_STRING*       cd;
     WCHAR                       tmp[4];
+    const char *sgi = getenv("SteamGameId");
 
     /* return error if name only consists of spaces */
     for (ptr = name; *ptr; ptr++) if (*ptr != ' ') break;
@@ -643,10 +644,13 @@ static ULONG get_full_path_helper(LPCWSTR name, LPWSTR buffer, ULONG size)
 
     RtlAcquirePebLock();
 
-    if (NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
-        cd = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir.DosPath;
-    else
-        cd = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory.DosPath;
+    cd = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory.DosPath;
+    
+    if (NtCurrentTeb()->Tib.SubSystemTib) {      /* FIXME: hack */
+        if ((!sgi) | (sgi && strcmp(sgi, "342200"))) {
+            cd = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir.DosPath;
+        }
+    }
 
     switch (RtlDetermineDosPathNameType_U(name))
     {
@@ -1020,7 +1024,7 @@ NTSTATUS WINAPI RtlSetCurrentDirectory_U(const UNICODE_STRING* dir)
     attr.SecurityDescriptor = NULL;
     attr.SecurityQualityOfService = NULL;
 
-    nts = NtOpenFile( &handle, FILE_TRAVERSE | SYNCHRONIZE, &attr, &io, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    nts = __syscall_NtOpenFile( &handle, FILE_TRAVERSE | SYNCHRONIZE, &attr, &io, FILE_SHARE_READ | FILE_SHARE_WRITE,
                       FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT );
     if (nts != STATUS_SUCCESS) goto out;
 

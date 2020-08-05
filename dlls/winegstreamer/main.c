@@ -175,8 +175,24 @@ static BOOL CALLBACK init_gstreamer_proc(INIT_ONCE *once, void *param, void **ct
     char **argv = args;
     int argc = 2;
     GError *err = NULL;
+    const char *e;
 
     TRACE("Initializing...\n");
+
+    if ((e = getenv("WINE_GST_REGISTRY_DIR")))
+    {
+        char gst_reg[PATH_MAX];
+#if defined(__x86_64__)
+        const char *arch = "/registry.x86_64.bin";
+#elif defined(__i386__)
+        const char *arch = "/registry.i386.bin";
+#else
+#error Bad arch
+#endif
+        strcpy(gst_reg, e);
+        strcat(gst_reg, arch);
+        setenv("GST_REGISTRY_1_0", gst_reg, 1);
+    }
 
     argv[0] = argv0;
     argv[1] = argv1;
@@ -365,7 +381,8 @@ HRESULT WINAPI DllRegisterServer(void)
     IFilterMapper2_RegisterFilter(mapper, &CLSID_WAVEParser, wave_parserW, NULL, NULL, NULL, &reg_wave_parser);
 
     IFilterMapper2_Release(mapper);
-    return S_OK;
+
+    return mfplat_DllRegisterServer();
 }
 
 HRESULT WINAPI DllUnregisterServer(void)

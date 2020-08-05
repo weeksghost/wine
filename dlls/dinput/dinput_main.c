@@ -90,12 +90,14 @@ static const struct dinput_device *dinput_devices[] =
 {
     &mouse_device,
     &keyboard_device,
-    &joystick_linuxinput_device,
-    &joystick_linux_device,
-    &joystick_osx_device
+    &joystick_sdl_device,
 };
 
 HINSTANCE DINPUT_instance;
+
+static ATOM        di_em_win_class;
+static const WCHAR di_em_winW[] = {'D','I','E','m','W','i','n',0};
+static HWND        di_em_win;
 
 static BOOL check_hook_thread(void);
 static CRITICAL_SECTION dinput_hook_crit;
@@ -453,6 +455,7 @@ static HRESULT WINAPI IDirectInputAImpl_EnumDevices(
     unsigned int i;
     int j;
     HRESULT r;
+    BOOL found_device = FALSE;
 
     TRACE("(this=%p,0x%04x '%s',%p,%p,0x%04x)\n",
 	  This, dwDevType, _dump_DIDEVTYPE_value(dwDevType, This->dwVersion),
@@ -475,9 +478,15 @@ static HRESULT WINAPI IDirectInputAImpl_EnumDevices(
             devInstance.dwSize = sizeof(devInstance);
             r = dinput_devices[i]->enum_deviceA(dwDevType, dwFlags, &devInstance, This->dwVersion, j);
             if (r == S_OK)
+            {
+                found_device = TRUE;
                 if (enum_callback_wrapper(lpCallback, &devInstance, pvRef) == DIENUM_STOP)
                     return S_OK;
+            }
         }
+        /* If we have found devices after SDL stop enumeration */
+        if (dinput_devices[i] == &joystick_sdl_device && found_device)
+            return S_OK;
     }
 
     return S_OK;
@@ -494,6 +503,7 @@ static HRESULT WINAPI IDirectInputWImpl_EnumDevices(
     unsigned int i;
     int j;
     HRESULT r;
+    BOOL found_device = FALSE;
 
     TRACE("(this=%p,0x%04x '%s',%p,%p,0x%04x)\n",
 	  This, dwDevType, _dump_DIDEVTYPE_value(dwDevType, This->dwVersion),
@@ -515,9 +525,15 @@ static HRESULT WINAPI IDirectInputWImpl_EnumDevices(
             TRACE("  - checking device %u ('%s')\n", i, dinput_devices[i]->name);
             r = dinput_devices[i]->enum_deviceW(dwDevType, dwFlags, &devInstance, This->dwVersion, j);
             if (r == S_OK)
+            {
+                found_device = TRUE;
                 if (enum_callback_wrapper(lpCallback, &devInstance, pvRef) == DIENUM_STOP)
                     return S_OK;
+            }
         }
+        /* If we have found devices after SDL stop enumeration */
+        if (dinput_devices[i] == &joystick_sdl_device && found_device)
+            return S_OK;
     }
 
     return S_OK;
@@ -609,6 +625,59 @@ static HRESULT WINAPI IDirectInputWImpl_QueryInterface(LPDIRECTINPUT7W iface, RE
 {
     IDirectInputImpl *This = impl_from_IDirectInput7W( iface );
     return IDirectInputAImpl_QueryInterface( &This->IDirectInput7A_iface, riid, ppobj );
+}
+
+static LRESULT WINAPI di_em_win_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    IDirectInputImpl *dinput;
+
+    TRACE( "%p %d %lx %lx\n", hwnd, msg, wparam, lparam );
+
+    if (msg == WM_INPUT)
+    {
+        EnterCriticalSection( &dinput_hook_crit );
+        LIST_FOR_EACH_ENTRY( dinput, &direct_input_list, IDirectInputImpl, entry )
+        {
+            IDirectInputDeviceImpl *dev;
+
+            EnterCriticalSection( &dinput->crit );
+            LIST_FOR_EACH_ENTRY( dev, &dinput->devices_list, IDirectInputDeviceImpl, entry )
+            {
+                if (dev->acquired && dev->event_proc && dev->use_raw_input)
+                {
+                    TRACE("calling %p->%p (%lx %lx)\n", dev, dev->event_proc, wparam, lparam);
+                    dev->event_proc( &dev->IDirectInputDevice8A_iface, GET_RAWINPUT_CODE_WPARAM(wparam), lparam );
+                }
+            }
+            LeaveCriticalSection( &dinput->crit );
+        }
+        LeaveCriticalSection( &dinput_hook_crit );
+    }
+
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+static void register_di_em_win_class(void)
+{
+    static WNDCLASSEXW class;
+
+    ZeroMemory(&class, sizeof(class));
+    class.cbSize = sizeof(class);
+    class.lpfnWndProc = di_em_win_wndproc;
+    class.hInstance = DINPUT_instance;
+    class.lpszClassName = di_em_winW;
+
+    if (!(di_em_win_class = RegisterClassExW( &class )))
+        WARN( "Unable to register message window class\n" );
+}
+
+static void unregister_di_em_win_class(void)
+{
+    if (!di_em_win_class)
+        return;
+
+    if (!UnregisterClassW( MAKEINTRESOURCEW( di_em_win_class ), DINPUT_instance ))
+        WARN( "Unable to unregister message window class\n" );
 }
 
 static HRESULT initialize_directinput_instance(IDirectInputImpl *This, DWORD dwVersion)
@@ -1073,6 +1142,9 @@ static HRESULT WINAPI IDirectInput8AImpl_EnumDevicesBySemantics(
                 didevis[device_count-1] = didevi;
             }
         }
+        /* If we have found devices after SDL stop enumeration */
+        if (dinput_devices[i] == &joystick_sdl_device && device_count)
+            return S_OK;
     }
 
     remain = device_count;
@@ -1178,6 +1250,9 @@ static HRESULT WINAPI IDirectInput8WImpl_EnumDevicesBySemantics(
                 didevis[device_count-1] = didevi;
             }
         }
+        /* If we have found devices after SDL stop enumeration */
+        if (dinput_devices[i] == &joystick_sdl_device && device_count)
+            return S_OK;
     }
 
     remain = device_count;
@@ -1653,7 +1728,7 @@ static LRESULT CALLBACK LL_hook_proc( int code, WPARAM wparam, LPARAM lparam )
 
         EnterCriticalSection( &dinput->crit );
         LIST_FOR_EACH_ENTRY( dev, &dinput->devices_list, IDirectInputDeviceImpl, entry )
-            if (dev->acquired && dev->event_proc)
+            if (dev->acquired && dev->event_proc && !dev->use_raw_input)
             {
                 TRACE("calling %p->%p (%lx %lx)\n", dev, dev->event_proc, wparam, lparam);
                 skip |= dev->event_proc( &dev->IDirectInputDevice8A_iface, wparam, lparam );
@@ -1705,6 +1780,9 @@ static DWORD WINAPI hook_thread_proc(void *param)
 {
     static HHOOK kbd_hook, mouse_hook;
     MSG msg;
+
+    di_em_win = CreateWindowW( MAKEINTRESOURCEW(di_em_win_class), di_em_winW,
+                               0, 0, 0, 0, 0, HWND_MESSAGE, 0, DINPUT_instance, NULL );
 
     /* Force creation of the message queue */
     PeekMessageW( &msg, 0, 0, 0, PM_NOREMOVE );
@@ -1773,6 +1851,9 @@ static DWORD WINAPI hook_thread_proc(void *param)
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    DestroyWindow( di_em_win );
+    di_em_win = NULL;
 
     FreeLibraryAndExitThread(DINPUT_instance, 0);
 }
@@ -1856,6 +1937,29 @@ void check_dinput_hooks(LPDIRECTINPUTDEVICE8W iface, BOOL acquired)
         hook_thread_event = NULL;
     }
 
+    if (dev->use_raw_input)
+    {
+        if (acquired)
+        {
+            dev->raw_device.dwFlags = 0;
+            if (dev->dwCoopLevel & DISCL_BACKGROUND)
+                dev->raw_device.dwFlags |= RIDEV_INPUTSINK;
+            if ((dev->dwCoopLevel & DISCL_EXCLUSIVE) && dev->raw_device.usUsage == 2)
+                dev->raw_device.dwFlags |= (RIDEV_CAPTUREMOUSE|RIDEV_NOLEGACY);
+            if ((dev->dwCoopLevel & DISCL_EXCLUSIVE) && dev->raw_device.usUsage == 6)
+                dev->raw_device.dwFlags |= (RIDEV_NOHOTKEYS|RIDEV_NOLEGACY);
+            dev->raw_device.hwndTarget = di_em_win;
+        }
+        else
+        {
+            dev->raw_device.dwFlags = RIDEV_REMOVE;
+            dev->raw_device.hwndTarget = NULL;
+        }
+
+        if (!RegisterRawInputDevices( &dev->raw_device, 1, sizeof(RAWINPUTDEVICE) ))
+            WARN( "Unable to (un)register raw device %x:%x\n", dev->raw_device.usUsagePage, dev->raw_device.usUsage );
+    }
+
     if (acquired)
         hook_change_finished_event = CreateEventW( NULL, FALSE, FALSE, NULL );
     PostThreadMessageW( hook_thread_id, WM_USER+0x10, 1, (LPARAM)hook_change_finished_event );
@@ -1890,9 +1994,11 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved)
       case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(inst);
         DINPUT_instance = inst;
+        register_di_em_win_class();
         break;
       case DLL_PROCESS_DETACH:
         if (reserved) break;
+        unregister_di_em_win_class();
         DeleteCriticalSection(&dinput_hook_crit);
         break;
     }

@@ -26,9 +26,11 @@
 #include "winuser.h"
 #include "setupapi.h"
 
+#include "wine/server.h"
 #include "wine/debug.h"
 #include "ddk/hidsdi.h"
 #include "ddk/hidtypes.h"
+#include "ddk/ntifs.h"
 #include "ddk/wdm.h"
 
 #include "initguid.h"
@@ -74,7 +76,7 @@ NTSTATUS HID_CreateDevice(DEVICE_OBJECT *native_device, HID_MINIDRIVER_REGISTRAT
     return STATUS_SUCCESS;
 }
 
-NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device)
+NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device, BOOL xinput_hack)
 {
     static const WCHAR backslashW[] = {'\\',0};
     WCHAR device_instance_id[MAX_DEVICE_ID_LEN];
@@ -86,6 +88,8 @@ NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device)
     BASE_DEVICE_EXTENSION *ext;
 
     HidD_GetHidGuid(&hidGuid);
+    if(xinput_hack)
+        hidGuid.Data4[7]++; /* HACK: use different GUID so only xinput will find this device */
     ext = device->DeviceExtension;
 
     RtlInitUnicodeString( &nameW, ext->device_name);
@@ -122,6 +126,8 @@ NTSTATUS HID_LinkDevice(DEVICE_OBJECT *device)
         FIXME( "failed to register device interface %x\n", status );
         return status;
     }
+
+    ext->link_handle = INVALID_HANDLE_VALUE;
 
     /* FIXME: This should probably be done in mouhid.sys. */
     if (ext->preparseData->caps.UsagePage == HID_USAGE_PAGE_GENERIC
@@ -207,6 +213,8 @@ void HID_DeleteDevice(DEVICE_OBJECT *device)
         IoCompleteRequest(irp, IO_NO_INCREMENT);
     }
 
+    CloseHandle(ext->link_handle);
+
     TRACE("Delete device(%p) %s\n", device, debugstr_w(ext->device_name));
     HeapFree(GetProcessHeap(), 0, ext->device_name);
     RtlFreeUnicodeString(&ext->link_name);
@@ -239,6 +247,28 @@ static NTSTATUS copy_packet_into_buffer(HID_XFER_PACKET *packet, BYTE* buffer, U
     }
     else
         return STATUS_BUFFER_OVERFLOW;
+}
+
+static void HID_Device_sendRawInput(DEVICE_OBJECT *device, HID_XFER_PACKET *packet)
+{
+    BASE_DEVICE_EXTENSION *ext = device->DeviceExtension;
+
+    if (ext->link_handle == INVALID_HANDLE_VALUE)
+        return;
+
+    SERVER_START_REQ(send_hardware_message)
+    {
+        req->win                  = 0;
+        req->flags                = SEND_HWMSG_RAWINPUT;
+        req->input.type           = HW_INPUT_HID;
+        req->input.hid.device     = wine_server_obj_handle(ext->link_handle);
+        req->input.hid.usage_page = ext->preparseData->caps.UsagePage;
+        req->input.hid.usage      = ext->preparseData->caps.Usage;
+        req->input.hid.length     = packet->reportBufferLen;
+        wine_server_add_data(req, packet->reportBuffer, packet->reportBufferLen);
+        wine_server_call(req);
+    }
+    SERVER_END_REQ;
 }
 
 static void HID_Device_processQueue(DEVICE_OBJECT *device)
@@ -324,6 +354,7 @@ static DWORD CALLBACK hid_device_thread(void *args)
             if (irp->IoStatus.u.Status == STATUS_SUCCESS)
             {
                 RingBuffer_Write(ext->ring_buffer, packet);
+                HID_Device_sendRawInput(device, packet);
                 HID_Device_processQueue(device);
             }
 
@@ -370,6 +401,7 @@ static DWORD CALLBACK hid_device_thread(void *args)
                 else
                     packet->reportId = 0;
                 RingBuffer_Write(ext->ring_buffer, packet);
+                HID_Device_sendRawInput(device, packet);
                 HID_Device_processQueue(device);
             }
 

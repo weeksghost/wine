@@ -304,6 +304,12 @@ static LONG WINTRUST_DefaultVerify(HWND hwnd, GUID *actionID,
     numSteps = WINTRUST_AddTrustStepsFromFunctions(verifySteps,
      provData->psPfns);
     err = WINTRUST_ExecuteSteps(verifySteps, numSteps, provData);
+
+    const char *sgi = getenv("SteamGameId");
+    if (sgi && !strcmp(sgi, "637650")) {
+        err = S_OK;
+    }
+
     goto done;
 
 error:
@@ -782,7 +788,7 @@ CRYPT_PROVIDER_CERT * WINAPI WTHelperGetProvCertFromChain(
 
     TRACE("(%p %d)\n", pSgnr, idxCert);
 
-    if (idxCert >= pSgnr->csCertChain || !pSgnr->pasCertChain)
+    if (!pSgnr || idxCert >= pSgnr->csCertChain || !pSgnr->pasCertChain)
         return NULL;
     cert = &pSgnr->pasCertChain[idxCert];
     TRACE("returning %p\n", cert);

@@ -35,8 +35,13 @@ WINE_DECLARE_DEBUG_CHANNEL(winediag);
 #include <X11/extensions/Xrandr.h>
 #include "x11drv.h"
 
+#define VK_NO_PROTOTYPES
+#define WINE_VK_HOST
+
 #include "wine/heap.h"
 #include "wine/unicode.h"
+#include "wine/vulkan.h"
+#include "wine/vulkan_driver.h"
 
 static void *xrandr_handle;
 
@@ -545,11 +550,22 @@ static int xrandr12_init_modes(void)
                                             xrandr12_get_current_mode,
                                             xrandr12_set_current_mode,
                                             output_info->nmode, 1 );
+    
+    int limit = 53; // required by nier_automata (55), sekiro (53), dark_souls3 (53)
+    int capped_resources_nmode = resources->nmode;
+    const char *sgi = getenv("SteamGameId");
+
+    if (sgi && (!strcmp(sgi, "374320") | !strcmp(sgi, "524220") | !strcmp(sgi, "814380")))
+    {
+        if (resources->nmode > limit) {
+            capped_resources_nmode = limit;
+        }
+    }
 
     xrandr_mode_count = 0;
     for (i = 0; i < output_info->nmode; ++i)
     {
-        for (j = 0; j < resources->nmode; ++j)
+        for (j = 0; j < capped_resources_nmode; ++j)
         {
             XRRModeInfo *mode = &resources->modes[j];
 
@@ -680,6 +696,111 @@ static BOOL is_crtc_primary( RECT primary, const XRRCrtcInfo *crtc )
            crtc->y + crtc->height == primary.bottom;
 }
 
+VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDisplayKHR)
+
+static BOOL get_gpu_properties_from_vulkan( struct x11drv_gpu *gpu, const XRRProviderInfo *provider_info )
+{
+    static const char *extensions[] =
+    {
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+        "VK_EXT_acquire_xlib_display",
+        "VK_EXT_direct_mode_display",
+    };
+    const struct vulkan_funcs *vulkan_funcs = get_vulkan_driver( WINE_VULKAN_DRIVER_VERSION );
+    VkResult (*pvkGetRandROutputDisplayEXT)( VkPhysicalDevice, Display *, RROutput, VkDisplayKHR * );
+    PFN_vkGetPhysicalDeviceProperties2 pvkGetPhysicalDeviceProperties2;
+    PFN_vkEnumeratePhysicalDevices pvkEnumeratePhysicalDevices;
+    uint32_t device_count, device_idx, output_idx;
+    VkPhysicalDevice *vk_physical_devices = NULL;
+    VkPhysicalDeviceProperties2 properties2;
+    VkInstanceCreateInfo create_info;
+    VkPhysicalDeviceIDProperties id;
+    VkInstance vk_instance = NULL;
+    VkDisplayKHR vk_display;
+    BOOL ret = FALSE;
+    VkResult vr;
+
+    if (!vulkan_funcs)
+        goto done;
+
+    memset( &create_info, 0, sizeof(create_info) );
+    create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    create_info.enabledExtensionCount = ARRAY_SIZE(extensions);
+    create_info.ppEnabledExtensionNames = extensions;
+
+    vr = vulkan_funcs->p_vkCreateInstance( &create_info, NULL, &vk_instance );
+    if (vr != VK_SUCCESS)
+    {
+        WARN("Failed to create a Vulkan instance, vr %d.\n", vr);
+        goto done;
+    }
+
+#define LOAD_VK_FUNC(f)                                                             \
+    if (!(p##f = (void *)vulkan_funcs->p_vkGetInstanceProcAddr( vk_instance, #f ))) \
+    {                                                                               \
+        WARN("Failed to load " #f ".\n");                                           \
+        goto done;                                                                  \
+    }
+
+    LOAD_VK_FUNC(vkEnumeratePhysicalDevices)
+    LOAD_VK_FUNC(vkGetPhysicalDeviceProperties2)
+    LOAD_VK_FUNC(vkGetRandROutputDisplayEXT)
+#undef LOAD_VK_FUNC
+
+    vr = pvkEnumeratePhysicalDevices( vk_instance, &device_count, NULL );
+    if (vr != VK_SUCCESS || !device_count)
+    {
+        WARN("No Vulkan device found, vr %d, device_count %d.\n", vr, device_count);
+        goto done;
+    }
+
+    if (!(vk_physical_devices = heap_calloc( device_count, sizeof(*vk_physical_devices) )))
+        goto done;
+
+    vr = pvkEnumeratePhysicalDevices( vk_instance, &device_count, vk_physical_devices );
+    if (vr != VK_SUCCESS)
+    {
+        WARN("vkEnumeratePhysicalDevices failed, vr %d.\n", vr);
+        goto done;
+    }
+
+    for (device_idx = 0; device_idx < device_count; ++device_idx)
+    {
+        for (output_idx = 0; output_idx < provider_info->noutputs; ++output_idx)
+        {
+            X11DRV_expect_error( gdi_display, XRandRErrorHandler, NULL );
+            vr = pvkGetRandROutputDisplayEXT( vk_physical_devices[device_idx], gdi_display,
+                                              provider_info->outputs[output_idx], &vk_display );
+            XSync( gdi_display, FALSE );
+            if (X11DRV_check_error() || vr != VK_SUCCESS || vk_display == VK_NULL_HANDLE)
+                continue;
+
+            memset( &id, 0, sizeof(id) );
+            id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+            properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties2.pNext = &id;
+
+            pvkGetPhysicalDeviceProperties2( vk_physical_devices[device_idx], &properties2 );
+            memcpy( &gpu->vulkan_uuid, id.deviceUUID, sizeof(id.deviceUUID) );
+            /* Ignore Khronos vendor IDs */
+            if (properties2.properties.vendorID < 0x10000)
+            {
+                gpu->vendor_id = properties2.properties.vendorID;
+                gpu->device_id = properties2.properties.deviceID;
+            }
+            MultiByteToWideChar( CP_UTF8, 0, properties2.properties.deviceName, -1, gpu->name, ARRAY_SIZE(gpu->name) );
+            ret = TRUE;
+            goto done;
+        }
+    }
+
+done:
+    heap_free( vk_physical_devices );
+    if (vk_instance)
+        vulkan_funcs->p_vkDestroyInstance( vk_instance, NULL );
+    return ret;
+}
+
 static BOOL xrandr14_get_gpus( struct x11drv_gpu **new_gpus, int *count )
 {
     static const WCHAR wine_adapterW[] = {'W','i','n','e',' ','A','d','a','p','t','e','r',0};
@@ -742,9 +863,9 @@ static BOOL xrandr14_get_gpus( struct x11drv_gpu **new_gpus, int *count )
         }
 
         gpus[i].id = provider_resources->providers[i];
-        MultiByteToWideChar( CP_UTF8, 0, provider_info->name, -1, gpus[i].name, ARRAY_SIZE(gpus[i].name) );
-        /* PCI IDs are all zero because there is currently no portable way to get it via XRandR. Some AMD drivers report
-         * their PCI address in the name but many others don't */
+        if (!get_gpu_properties_from_vulkan( &gpus[i], provider_info ))
+            MultiByteToWideChar( CP_UTF8, 0, provider_info->name, -1, gpus[i].name, ARRAY_SIZE(gpus[i].name) );
+        /* FIXME: Add an alternate method of getting PCI IDs, for systems that don't support Vulkan */
         pXRRFreeProviderInfo( provider_info );
     }
 
@@ -953,7 +1074,7 @@ static BOOL xrandr14_get_monitors( ULONG_PTR adapter_id, struct x11drv_monitor *
     XRROutputInfo *output_info = NULL, *enum_output_info = NULL;
     XRRCrtcInfo *crtc_info = NULL, *enum_crtc_info;
     INT primary_index = 0, monitor_count = 0, capacity;
-    RECT work_rect, primary_rect;
+    RECT primary_rect;
     BOOL ret = FALSE;
     INT i;
 
@@ -988,7 +1109,6 @@ static BOOL xrandr14_get_monitors( ULONG_PTR adapter_id, struct x11drv_monitor *
     /* Active monitors, need to find other monitors with the same coordinates as mirrored */
     else
     {
-        query_work_area( &work_rect );
         primary_rect = get_primary_rect( screen_resources );
 
         for (i = 0; i < screen_resources->noutput; ++i)
@@ -1031,8 +1151,7 @@ static BOOL xrandr14_get_monitors( ULONG_PTR adapter_id, struct x11drv_monitor *
 
                     SetRect( &monitors[monitor_count].rc_monitor, crtc_info->x, crtc_info->y,
                              crtc_info->x + crtc_info->width, crtc_info->y + crtc_info->height );
-                    if (!IntersectRect( &monitors[monitor_count].rc_work, &work_rect, &monitors[monitor_count].rc_monitor ))
-                        monitors[monitor_count].rc_work = monitors[monitor_count].rc_monitor;
+                    monitors[monitor_count].rc_work = get_work_area( &monitors[monitor_count].rc_monitor );
 
                     monitors[monitor_count].state_flags = DISPLAY_DEVICE_ATTACHED;
                     if (!IsRectEmpty( &monitors[monitor_count].rc_monitor ))
