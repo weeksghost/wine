@@ -86,6 +86,8 @@
 #include "winioctl.h"
 #include "winternl.h"
 #include "unix_private.h"
+#include "esync.h"
+#include "fsync.h"
 #include "wine/list.h"
 #include "wine/debug.h"
 
@@ -1146,6 +1148,7 @@ static NTSTATUS open_dll_file( const char *name, void **module, SECTION_IMAGE_IN
     SIZE_T len = 0;
     NTSTATUS status;
     HANDLE handle, mapping;
+    ULONG alloc_type;
 
     if ((status = open_unix_file( &handle, name, GENERIC_READ | SYNCHRONIZE, &attr, 0,
                                   FILE_SHARE_READ | FILE_SHARE_DELETE, FILE_OPEN,
@@ -1190,8 +1193,9 @@ static NTSTATUS open_dll_file( const char *name, void **module, SECTION_IMAGE_IN
         *module = NULL;
     }
     NtQuerySection( mapping, SectionImageInformation, image_info, sizeof(*image_info), NULL );
+    alloc_type = (image_info->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) ? MEM_TOP_DOWN : 0;
     status = NtMapViewOfSection( mapping, NtCurrentProcess(), module, 0, 0, NULL, &len,
-                                 ViewShare, 0, PAGE_EXECUTE_READ );
+                                 ViewShare, alloc_type, PAGE_EXECUTE_READ );
     if (status == STATUS_IMAGE_NOT_AT_BASE) status = STATUS_SUCCESS;
     NtClose( mapping );
     if (status) return status;
@@ -1568,6 +1572,8 @@ static void start_main_thread(void)
     dbg_init();
     server_init_process();
     startup_info_size = server_init_thread( teb->Peb, &suspend );
+    fsync_init();
+    esync_init();
     virtual_map_user_shared_data();
     init_cpu_info();
     init_files();
@@ -1782,6 +1788,8 @@ void __wine_main( int argc, char *argv[], char *envp[] )
 #endif
 
     virtual_init();
+    signal_init_early();
+
     init_environment( argc, argv, envp );
 
 #ifdef __APPLE__

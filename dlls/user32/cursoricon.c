@@ -113,7 +113,7 @@ static int get_display_bpp(void)
 
 static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
 
-static const struct png_funcs *png_funcs;
+const struct png_funcs *png_funcs;
 
 static BOOL WINAPI load_libpng( INIT_ONCE *once, void *param, void **context )
 {
@@ -121,7 +121,7 @@ static BOOL WINAPI load_libpng( INIT_ONCE *once, void *param, void **context )
     return TRUE;
 }
 
-static BOOL have_libpng(void)
+BOOL have_libpng(void)
 {
     return InitOnceExecuteOnce( &init_once, load_libpng, NULL, NULL ) && png_funcs;
 }
@@ -1490,7 +1490,12 @@ static HICON CURSORICON_Load(HINSTANCE hInstance, LPCWSTR name,
           hInstance, debugstr_w(name), width, height, depth, fCursor, loadflags);
 
     if ( loadflags & LR_LOADFROMFILE )    /* Load from file */
-        return CURSORICON_LoadFromFile( name, width, height, depth, fCursor, loadflags );
+    {
+        if (IS_INTRESOURCE(name) && GetProcessVersion(0) < 0x40000)
+            WARN("Windows 3.1 app set LR_LOADFROMFILE without a name, fallback to loading from resource\n");
+        else
+            return CURSORICON_LoadFromFile( name, width, height, depth, fCursor, loadflags );
+    }
 
     if (!hInstance) hInstance = user32_module;  /* Load OEM cursor/icon */
 

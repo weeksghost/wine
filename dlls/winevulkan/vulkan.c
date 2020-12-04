@@ -20,6 +20,7 @@
 #include "config.h"
 #include <time.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -281,6 +282,8 @@ static struct VkPhysicalDevice_T *wine_vk_physical_device_alloc(struct VkInstanc
         }
     }
 
+    num_properties += wine_vk_device_extension_faked_count();
+
     TRACE("Host supported extensions %u, Wine supported extensions %u\n", num_host_properties, num_properties);
 
     if (!(object->extensions = heap_calloc(num_properties, sizeof(*object->extensions))))
@@ -296,6 +299,11 @@ static struct VkPhysicalDevice_T *wine_vk_physical_device_alloc(struct VkInstanc
             object->extensions[j] = host_properties[i];
             j++;
         }
+    }
+    for (i = 0; i < wine_vk_device_extension_faked_count(); i++)
+    {
+        object->extensions[j] = *wine_vk_device_extension_faked_idx(i);
+        j++;
     }
     object->extension_count = num_properties;
 
@@ -380,13 +388,27 @@ static void wine_vk_device_free_create_info(VkDeviceCreateInfo *create_info)
         heap_free((void *)group_info->pPhysicalDevices);
     }
 
+    heap_free((void *)create_info->ppEnabledExtensionNames);
+
     free_VkDeviceCreateInfo_struct_chain(create_info);
+}
+
+static BOOL wine_vk_device_extension_faked(const char *name)
+{
+    unsigned int i;
+    for (i = 0; i < wine_vk_device_extension_faked_count(); i++)
+    {
+        if (strcmp(wine_vk_device_extension_faked_idx(i)->extensionName, name) == 0)
+            return TRUE;
+    }
+    return FALSE;
 }
 
 static VkResult wine_vk_device_convert_create_info(const VkDeviceCreateInfo *src,
         VkDeviceCreateInfo *dst)
 {
     VkDeviceGroupDeviceCreateInfo *group_info;
+    const char** extensions;
     unsigned int i;
     VkResult res;
 
@@ -413,6 +435,21 @@ static VkResult wine_vk_device_convert_create_info(const VkDeviceCreateInfo *src
             physical_devices[i] = group_info->pPhysicalDevices[i]->phys_dev;
         }
         group_info->pPhysicalDevices = physical_devices;
+    }
+
+
+    /* Allocate our own extension list, and remove any faked extensions
+     * so they don't get passed through to the driver. */
+    extensions = heap_alloc(sizeof(const char*) * src->enabledExtensionCount);
+    dst->ppEnabledExtensionNames = extensions;
+    dst->enabledExtensionCount = 0;
+    for (i = 0; i < src->enabledExtensionCount; i++) {
+        const char *extension_name = src->ppEnabledExtensionNames[i];
+
+        if (!wine_vk_device_extension_faked(extension_name)) {
+            extensions[dst->enabledExtensionCount] = extension_name;
+            dst->enabledExtensionCount++;
+        }
     }
 
     /* Should be filtered out by loader as ICDs don't support layers. */
@@ -864,6 +901,7 @@ VkResult WINAPI wine_vkCreateInstance(const VkInstanceCreateInfo *create_info,
 {
     VkInstanceCreateInfo create_info_host;
     const VkApplicationInfo *app_info;
+    uint32_t new_mxcsr, old_mxcsr;
     struct VkInstance_T *object;
     VkResult res;
 
@@ -917,7 +955,12 @@ VkResult WINAPI wine_vkCreateInstance(const VkInstanceCreateInfo *create_info,
      * the native physical devices and present those to the application.
      * Cleanup happens as part of wine_vkDestroyInstance.
      */
+    __asm__ volatile("stmxcsr %0" : "=m"(old_mxcsr));
+    new_mxcsr = 0x1f80;
+    __asm__ volatile("ldmxcsr %0" : : "m"(new_mxcsr));
     res = wine_vk_instance_load_physical_devices(object);
+    __asm__ volatile("ldmxcsr %0" : : "m"(old_mxcsr));
+    TRACE("old_mxcsr %#x.\n", old_mxcsr);
     if (res != VK_SUCCESS)
     {
         ERR("Failed to load physical devices, res=%d\n", res);
@@ -1658,6 +1701,26 @@ static void release_display_device_init_mutex(HANDLE mutex)
     CloseHandle(mutex);
 }
 
+void WINAPI wine_vkGetPhysicalDeviceProperties(VkPhysicalDevice physical_device,
+        VkPhysicalDeviceProperties *properties)
+{
+    TRACE("%p, %p\n", physical_device, properties);
+
+    thunk_vkGetPhysicalDeviceProperties(physical_device, properties);
+
+    {
+        const char *sgi = getenv("WINE_HIDE_NVIDIA_GPU");
+        if (sgi && *sgi != '0')
+        {
+            if (properties->vendorID == 0x10de /* NVIDIA */)
+            {
+                properties->vendorID = 0x1002; /* AMD */
+                properties->deviceID = 0x67df; /* RX 480 */
+            }
+        }
+    }
+}
+
 /* Wait until graphics driver is loaded by explorer */
 static void wait_graphics_driver_ready(void)
 {
@@ -1721,6 +1784,18 @@ void WINAPI wine_vkGetPhysicalDeviceProperties2(VkPhysicalDevice phys_dev,
 
     thunk_vkGetPhysicalDeviceProperties2(phys_dev, properties2);
     fill_luid_property(properties2);
+
+    {
+        const char *sgi = getenv("WINE_HIDE_NVIDIA_GPU");
+        if (sgi && *sgi != '0')
+        {
+            if (properties2->properties.vendorID == 0x10de /* NVIDIA */)
+            {
+                properties2->properties.vendorID = 0x1002; /* AMD */
+                properties2->properties.deviceID = 0x67df; /* RX 480 */
+            }
+        }
+    }
 }
 
 void WINAPI wine_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice phys_dev,
@@ -1730,6 +1805,18 @@ void WINAPI wine_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice phys_dev,
 
     thunk_vkGetPhysicalDeviceProperties2KHR(phys_dev, properties2);
     fill_luid_property(properties2);
+
+    {
+        const char *sgi = getenv("WINE_HIDE_NVIDIA_GPU");
+        if (sgi && *sgi != '0')
+        {
+            if (properties2->properties.vendorID == 0x10de /* NVIDIA */)
+            {
+                properties2->properties.vendorID = 0x1002; /* AMD */
+                properties2->properties.deviceID = 0x67df; /* RX 480 */
+            }
+        }
+    }
 }
 
 void WINAPI wine_vkGetPhysicalDeviceExternalSemaphoreProperties(VkPhysicalDevice phys_dev,
@@ -1803,14 +1890,33 @@ VkResult WINAPI wine_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice 
 VkResult WINAPI wine_vkGetPhysicalDeviceSurfaceCapabilities2KHR(VkPhysicalDevice phys_dev,
         const VkPhysicalDeviceSurfaceInfo2KHR *surface_info, VkSurfaceCapabilities2KHR *capabilities)
 {
+    VkPhysicalDeviceSurfaceInfo2KHR surface_info_modified;
     VkResult res;
 
     TRACE("%p, %p, %p\n", phys_dev, surface_info, capabilities);
 
-    res = thunk_vkGetPhysicalDeviceSurfaceCapabilities2KHR(phys_dev, surface_info, capabilities);
+    /* Toss out VkSurfaceFullScreenExclusiveInfoEXT
+     * and VkSurfaceFullScreenExclusiveWin32InfoEXT
+     *
+     * TODO: Properly convert the pNext chain and don't
+     * unconditionally toss out every element.
+     */
+    surface_info_modified.sType   = surface_info->sType;
+    surface_info_modified.pNext   = NULL;
+    surface_info_modified.surface = surface_info->surface;
+
+    res = thunk_vkGetPhysicalDeviceSurfaceCapabilities2KHR(phys_dev, &surface_info_modified, capabilities);
 
     if (res == VK_SUCCESS)
+    {
+        VkSurfaceCapabilitiesFullScreenExclusiveEXT *full_screen_exclusive_caps;
+
         adjust_max_image_count(phys_dev, &capabilities->surfaceCapabilities);
+
+        /* Lie and say we support exclusive fullscreen. */
+        if ((full_screen_exclusive_caps = wine_vk_find_struct(capabilities, SURFACE_CAPABILITIES_FULL_SCREEN_EXCLUSIVE_EXT)))
+            full_screen_exclusive_caps->fullScreenExclusiveSupported = VK_TRUE;
+    }
 
     return res;
 }
@@ -2005,6 +2111,63 @@ VkResult WINAPI wine_vkDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebu
     wine_name_info.object = wine_vk_unwrap_handle(name_info->objectType, name_info->object);
 
     return thunk_vkDebugMarkerSetObjectNameEXT(device, &wine_name_info);
+}
+
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfaceFormats2KHR(VkPhysicalDevice phys_dev,
+        const VkPhysicalDeviceSurfaceInfo2KHR *surface_info, uint32_t *surface_format_count,
+        VkSurfaceFormat2KHR *surface_formats)
+{
+    VkPhysicalDeviceSurfaceInfo2KHR surface_info_modified;
+    VkResult res;
+
+    TRACE("%p, %p, %p, %p\n", phys_dev, surface_info, surface_format_count, surface_formats);
+
+    /* Toss out VkSurfaceFullScreenExclusiveInfoEXT
+     * and VkSurfaceFullScreenExclusiveWin32InfoEXT
+     *
+     * TODO: Properly convert the pNext chain and don't
+     * unconditionally toss out every element.
+     */
+    surface_info_modified.sType   = surface_info->sType;
+    surface_info_modified.pNext   = NULL;
+    surface_info_modified.surface = surface_info->surface;
+
+    res = thunk_vkGetPhysicalDeviceSurfaceFormats2KHR(phys_dev, &surface_info_modified, surface_format_count, surface_formats);
+
+    return res;
+}
+
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t *pPresentModeCount, VkPresentModeKHR *pPresentModes);
+VkResult WINAPI wine_vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR *pModes);
+
+VkResult WINAPI wine_vkGetPhysicalDeviceSurfacePresentModes2EXT(
+    VkPhysicalDevice phys_dev, const VkPhysicalDeviceSurfaceInfo2KHR *surface_info,
+    uint32_t *present_mode_count, VkPresentModeKHR *present_modes)
+{
+    TRACE("%p, %p, %p, %p", phys_dev, surface_info, present_mode_count, present_modes);
+    return wine_vkGetPhysicalDeviceSurfacePresentModesKHR(phys_dev, surface_info->surface, present_mode_count, present_modes);
+}
+
+VkResult WINAPI wine_vkGetDeviceGroupSurfacePresentModes2EXT(
+    VkDevice device, const VkPhysicalDeviceSurfaceInfo2KHR *surface_info,
+    VkDeviceGroupPresentModeFlagsKHR *modes)
+{
+    TRACE("%p, %p, %p", device, surface_info, modes);
+    return wine_vkGetDeviceGroupSurfacePresentModesKHR(device, surface_info->surface, modes);
+}
+
+VkResult WINAPI wine_vkAcquireFullScreenExclusiveModeEXT(
+    VkDevice device, VkSwapchainKHR swapchain)
+{
+    TRACE("%p, %s", device, wine_dbgstr_longlong(swapchain));
+    return VK_SUCCESS;
+}
+
+VkResult WINAPI wine_vkReleaseFullScreenExclusiveModeEXT(
+    VkDevice device, VkSwapchainKHR swapchain)
+{
+    TRACE("%p, %s", device, wine_dbgstr_longlong(swapchain));
+    return VK_SUCCESS;
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)

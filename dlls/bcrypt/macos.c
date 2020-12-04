@@ -271,6 +271,18 @@ static NTSTATUS CDECL key_asymmetric_duplicate( struct key *key_orig, struct key
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static NTSTATUS CDECL key_export_dh( struct key *key, UCHAR *buf, ULONG len, ULONG *ret_len )
+{
+    FIXME( "not implemented on Mac\n" );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+static NTSTATUS CDECL key_import_pair_dh( struct key *key, UCHAR *buf, ULONG len )
+{
+    FIXME( "not implemented on Mac\n" );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 static const struct key_funcs key_funcs =
 {
     key_set_property,
@@ -291,14 +303,27 @@ static const struct key_funcs key_funcs =
     key_export_ecc,
     key_import_dsa_capi,
     key_import_ecc,
-    key_import_rsa
+    key_import_rsa,
+    NULL,
+    key_export_dh,
+    key_import_pair_dh
 };
 
-NTSTATUS CDECL __wine_init_unix_lib( HMODULE module, DWORD reason, const void *ptr_in, void *ptr_out )
+struct key_funcs * macos_lib_init( DWORD reason )
 {
-    if (reason != DLL_PROCESS_ATTACH) return STATUS_SUCCESS;
-    *(const struct key_funcs **)ptr_out = &key_funcs;
-    return STATUS_SUCCESS;
+    if (reason != DLL_PROCESS_ATTACH) return NULL;
+    return &key_funcs;
 }
 
+#else
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winbase.h"
+#include "winternl.h"
+
+struct key_funcs * macos_lib_init( DWORD reason )
+{
+    return NULL;
+}
 #endif
