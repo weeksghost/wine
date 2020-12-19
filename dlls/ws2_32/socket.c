@@ -4590,6 +4590,36 @@ INT WINAPI WSAIoctl(SOCKET s, DWORD code, LPVOID in_buff, DWORD in_size, LPVOID 
         break;
     }
 
+    case WS_SIO_IDEAL_SEND_BACKLOG_QUERY:
+    {
+        int ret, proto;
+        unsigned protolen = sizeof(protolen);
+
+        if (!out_buff)
+        {
+            SetLastError(WSAEFAULT);
+            return SOCKET_ERROR;
+        }
+
+        if ( (fd = get_sock_fd( s, 0, NULL )) == -1)
+            return SOCKET_ERROR;
+
+        ret = getsockopt(fd, SOL_SOCKET, SO_PROTOCOL, &proto, &protolen);
+        if(ret || proto != IPPROTO_TCP)
+        {
+            TRACE("ret %d, proto %d\n", ret, proto);
+            release_sock_fd( s, fd );
+            SetLastError(WSAEOPNOTSUPP);
+            return SOCKET_ERROR;
+        }
+
+        total = sizeof(DWORD);
+        *(DWORD*)out_buff = 0x10000; /* 64k */
+
+        release_sock_fd( s, fd );
+        break;
+    }
+
     case WS_SIOCATMARK:
     {
         unsigned int oob = 0, atmark = 0;
