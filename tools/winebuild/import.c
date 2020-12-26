@@ -1524,6 +1524,7 @@ void output_syscalls( DLLSPEC *spec )
             /* Legends of Runeterra hooks the first system call return instruction, and
              * depends on us returning to it. Adjust the return address accordingly. */
             output( "\tsubq $0xb,0x8(%%rbp)\n" );
+            output( "\tsubq $0xf000,%%rax\n" );
             output( "\tmovq %%rsp,0x328(%%rcx)\n" );  /* amd64_thread_data()->syscall_frame */
             output( "\tcmpq $%u,%%rax\n", count );
             output( "\tjae 4f\n" );
@@ -1680,6 +1681,13 @@ void output_syscalls( DLLSPEC *spec )
         output( ".Lsyscall_args:\n" );
         for (i = 0; i < count; i++)
             output( "\t.byte %u\n", get_args_size( syscalls[i] ));
+
+        for (i = 0; i < count; i++)
+        {
+            output( "\t.align %d\n", get_alignment( get_ptr_size() ) );
+            output( "%s\n", asm_globl(strmake( "__wine_syscall_nr_%s", get_link_name( syscalls[i] ) )) );
+            output( "\t.long %u\n", i + 0xf000 );
+        }
         return;
     }
 
@@ -1717,7 +1725,7 @@ void output_syscalls( DLLSPEC *spec )
              * validate that instruction, we can just put a jmp there instead. */
             output( "\t.byte 0x4c,0x8b,0xd1\n" ); /* movq %rcx,%r10 */
             output( "\t.byte 0xb8\n" );           /* movl $i,%eax */
-            output( "\t.long %u\n", i );
+            output( "\t.long %u\n", 0xf000 + i );
             output( "\t.byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n" ); /* testb $1,0x7ffe0308 */
             output( "\t.byte 0x75,0x03\n" );      /* jne 1f */
             output( "\t.byte 0x0f,0x05\n" );      /* syscall */
