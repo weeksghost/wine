@@ -354,6 +354,9 @@ HRESULT WINAPI DllRegisterServer(void)
 
     TRACE(".\n");
 
+    if (FAILED(mfplat_DllRegisterServer()))
+        return hr;
+
     if (FAILED(hr = __wine_register_resources(winegstreamer_instance)))
         return hr;
 
