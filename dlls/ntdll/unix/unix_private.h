@@ -54,9 +54,11 @@ struct ntdll_thread_data
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
     pthread_t          pthread_id;    /* pthread thread id */
+    void              *pthread_stack; /* pthread stack */
     struct list        entry;         /* entry in TEB list */
     PRTL_THREAD_START_ROUTINE start;  /* thread entry point */
     void              *param;         /* thread entry point parameter */
+    int                esync_apc_fd;  /* fd to wait on for user APCs */
 };
 
 C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
@@ -210,6 +212,7 @@ extern NTSTATUS signal_alloc_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_free_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_process(void) DECLSPEC_HIDDEN;
+extern void signal_init_early(void) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg,
                                                    BOOL suspend, void *thunk, TEB *teb ) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_exit_thread( int status, void (*func)(int) ) DECLSPEC_HIDDEN;
@@ -469,5 +472,7 @@ static inline int ntdll_wcsnicmp( const WCHAR *str1, const WCHAR *str2, int n )
 #define wcsupr(str)        ntdll_wcsupr(str)
 #define towupper(c)        ntdll_towupper(c)
 #define towlower(c)        ntdll_towlower(c)
+
+BOOL CDECL __wine_needs_override_large_address_aware(void);
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */

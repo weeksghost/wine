@@ -354,6 +354,9 @@ HRESULT WINAPI DllRegisterServer(void)
 
     TRACE(".\n");
 
+    if (FAILED(mfplat_DllRegisterServer()))
+        return hr;
+
     if (FAILED(hr = __wine_register_resources(winegstreamer_instance)))
         return hr;
 
@@ -368,7 +371,8 @@ HRESULT WINAPI DllRegisterServer(void)
     IFilterMapper2_RegisterFilter(mapper, &CLSID_WAVEParser, wave_parserW, NULL, NULL, NULL, &reg_wave_parser);
 
     IFilterMapper2_Release(mapper);
-    return S_OK;
+
+    return mfplat_DllRegisterServer();
 }
 
 HRESULT WINAPI DllUnregisterServer(void)

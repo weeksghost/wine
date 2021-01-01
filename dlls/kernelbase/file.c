@@ -38,10 +38,13 @@
 #include "shlwapi.h"
 #include "ddk/ntddk.h"
 #include "ddk/ntddser.h"
+#include "ntifs.h"
 
 #include "kernelbase.h"
 #include "wine/exception.h"
 #include "wine/debug.h"
+
+#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(file);
 
@@ -503,6 +506,10 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
     DWORD count;
     BOOL ret = FALSE;
     char *buffer;
+    LARGE_INTEGER size;
+    LARGE_INTEGER transferred;
+    DWORD cbret;
+    DWORD source_access = GENERIC_READ;
 
     if (!source || !dest)
     {
@@ -517,7 +524,15 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
 
     TRACE("%s -> %s, %x\n", debugstr_w(source), debugstr_w(dest), flags);
 
-    if ((h1 = CreateFileW( source, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    if (flags & COPY_FILE_RESTARTABLE)
+        FIXME("COPY_FILE_RESTARTABLE is not supported\n");
+    if (flags & COPY_FILE_COPY_SYMLINK)
+        FIXME("COPY_FILE_COPY_SYMLINK is not supported\n");
+
+    if (flags & COPY_FILE_OPEN_SOURCE_FOR_WRITE)
+        source_access |= GENERIC_WRITE;
+
+    if ((h1 = CreateFileW( source, source_access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            NULL, OPEN_EXISTING, 0, 0 )) == INVALID_HANDLE_VALUE)
     {
         WARN("Unable to open source %s\n", debugstr_w(source));
@@ -551,7 +566,11 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
         }
     }
 
-    if ((h2 = CreateFileW( dest, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+    if ((h2 = CreateFileW( dest, GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           (flags & COPY_FILE_FAIL_IF_EXISTS) ? CREATE_NEW : CREATE_ALWAYS,
+                           info.dwFileAttributes, h1 )) == INVALID_HANDLE_VALUE &&
+        /* retry without DELETE if we got a sharing violation */
+        (h2 = CreateFileW( dest, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            (flags & COPY_FILE_FAIL_IF_EXISTS) ? CREATE_NEW : CREATE_ALWAYS,
                            info.dwFileAttributes, h1 )) == INVALID_HANDLE_VALUE)
     {
@@ -559,6 +578,30 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
         HeapFree( GetProcessHeap(), 0, buffer );
         CloseHandle( h1 );
         return FALSE;
+    }
+
+    size.u.LowPart = info.nFileSizeLow;
+    size.u.HighPart = info.nFileSizeHigh;
+    transferred.QuadPart = 0;
+
+    if (progress)
+    {
+        cbret = progress( size, transferred, size, transferred, 1,
+                          CALLBACK_STREAM_SWITCH, h1, h2, param );
+        if (cbret == PROGRESS_QUIET)
+            progress = NULL;
+        else if (cbret == PROGRESS_STOP)
+        {
+            SetLastError( ERROR_REQUEST_ABORTED );
+            goto done;
+        }
+        else if (cbret == PROGRESS_CANCEL)
+        {
+            BOOLEAN disp = TRUE;
+            SetFileInformationByHandle( h2, FileDispositionInfo, &disp, sizeof(disp) );
+            SetLastError( ERROR_REQUEST_ABORTED );
+            goto done;
+        }
     }
 
     while (ReadFile( h1, buffer, buffer_size, &count, NULL ) && count)
@@ -570,6 +613,27 @@ BOOL WINAPI CopyFileExW( const WCHAR *source, const WCHAR *dest, LPPROGRESS_ROUT
             if (!WriteFile( h2, p, count, &res, NULL ) || !res) goto done;
             p += res;
             count -= res;
+
+            if (progress)
+            {
+                transferred.QuadPart += res;
+                cbret = progress( size, transferred, size, transferred, 1,
+                                  CALLBACK_CHUNK_FINISHED, h1, h2, param );
+                if (cbret == PROGRESS_QUIET)
+                    progress = NULL;
+                else if (cbret == PROGRESS_STOP)
+                {
+                    SetLastError( ERROR_REQUEST_ABORTED );
+                    goto done;
+                }
+                else if (cbret == PROGRESS_CANCEL)
+                {
+                    BOOLEAN disp = TRUE;
+                    SetFileInformationByHandle( h2, FileDispositionInfo, &disp, sizeof(disp) );
+                    SetLastError( ERROR_REQUEST_ABORTED );
+                    goto done;
+                }
+            }
         }
     }
     ret =  TRUE;
@@ -648,6 +712,106 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateDirectoryExW( LPCWSTR template, LPCWSTR path
     return CreateDirectoryW( path, sa );
 }
 
+#define MAX_BLACKLISTED_FILENAMES 32
+
+static struct
+{
+    const WCHAR *name;
+    size_t name_len;
+}
+blacklist_filenames[MAX_BLACKLISTED_FILENAMES];
+
+static unsigned int blacklist_filename_count;
+
+static BOOL CALLBACK init_file_blacklist(PINIT_ONCE init_once, PVOID parameter, PVOID *context)
+{
+    static WCHAR origin_blacklist[] = L"kernel32.dll;user32.dll";
+
+    const WCHAR separators[] = L",; ";
+    WCHAR *buffer, *token;
+    DWORD size;
+
+    if ((size = GetEnvironmentVariableW(L"WINE_BLACKLIST_FILES", NULL, 0)))
+    {
+        if (!(buffer = heap_alloc(sizeof(*buffer) * size)))
+        {
+            ERR("No memory.\n");
+            return FALSE;
+        }
+
+        if (GetEnvironmentVariableW(L"WINE_BLACKLIST_FILES", buffer, size) != size - 1)
+        {
+            ERR("Error getting WINE_BLACKLIST_FILES env variable.\n");
+            return FALSE;
+        }
+    }
+    else
+    {
+        static const WCHAR *origin_names[] = {
+            L"igoproxy64.exe",
+            L"igoproxy.exe",
+            L"origin.exe",
+            L"easteamproxy.exe"
+        };
+
+        WCHAR cur_exe[MAX_PATH];
+        DWORD cur_exe_len, i;
+
+        if (!(cur_exe_len = GetModuleFileNameW(NULL, cur_exe, ARRAY_SIZE(cur_exe))))
+            return TRUE;
+
+        buffer = NULL;
+
+        for (i = 0; i < ARRAY_SIZE(origin_names); ++i)
+        {
+            DWORD origin_name_len = wcslen(origin_names[i]);
+            if (cur_exe_len >= origin_name_len &&
+                    wcsicmp(cur_exe + cur_exe_len - origin_name_len, origin_names[i]) == 0)
+            {
+                FIXME("using origin file blacklist for %s\n", debugstr_w(cur_exe));
+                buffer = origin_blacklist;
+                break;
+            }
+        }
+
+        if (!buffer)
+            return TRUE;
+    }
+
+    blacklist_filename_count = 0;
+    token = wcstok(buffer, separators);
+    while (token && blacklist_filename_count < MAX_BLACKLISTED_FILENAMES)
+    {
+        FIXME("Blacklisting %s file.\n", debugstr_w(token));
+        blacklist_filenames[blacklist_filename_count].name = token;
+        blacklist_filenames[blacklist_filename_count++].name_len = wcslen(token);
+        token = wcstok(NULL, separators);
+    }
+
+    if (token && blacklist_filename_count == MAX_BLACKLISTED_FILENAMES)
+        ERR("File black list is too long.\n");
+
+    return TRUE;
+}
+
+static BOOL is_file_blacklisted(LPCWSTR filename)
+{
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+    unsigned int i;
+    size_t len;
+
+    if (!InitOnceExecuteOnce(&init_once, init_file_blacklist, NULL, NULL))
+        return FALSE;
+
+    len = wcslen(filename);
+
+    for (i = 0; i < blacklist_filename_count; ++i)
+        if (blacklist_filenames[i].name_len <= len
+                && !wcsicmp(blacklist_filenames[i].name, filename + len - blacklist_filenames[i].name_len))
+            return TRUE;
+
+    return FALSE;
+}
 
 /*************************************************************************
  *	CreateFile2   (kernelbase.@)
@@ -751,7 +915,6 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
         FILE_OVERWRITE      /* TRUNCATE_EXISTING */
     };
 
-
     /* sanity checks */
 
     if (!filename || !filename[0])
@@ -769,6 +932,13 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
            (sharing & FILE_SHARE_WRITE) ? "FILE_SHARE_WRITE " : "",
            (sharing & FILE_SHARE_DELETE) ? "FILE_SHARE_DELETE " : "",
            creation, attributes);
+
+    if (is_file_blacklisted(filename))
+    {
+        FIXME("\"%s\" is blacklisted.\n", debugstr_w(filename));
+        SetLastError( ERROR_FILE_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
 
     if (!wcsncmp( filename, L"\\\\.\\", 4 ))
     {
@@ -952,8 +1122,106 @@ done:
  */
 BOOLEAN WINAPI /* DECLSPEC_HOTPATCH */ CreateSymbolicLinkW( LPCWSTR link, LPCWSTR target, DWORD flags )
 {
-    FIXME( "(%s %s %d): stub\n", debugstr_w(link), debugstr_w(target), flags );
-    return TRUE;
+    static INT struct_size = offsetof(REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer.PathBuffer[0]);
+    static INT header_size = offsetof(REPARSE_DATA_BUFFER, GenericReparseBuffer);
+    INT buffer_size, data_size, string_len, prefix_len;
+    WCHAR *subst_dest, *print_dest, *string;
+    REPARSE_DATA_BUFFER *buffer;
+    LPWSTR target_path = NULL;
+    BOOL is_relative, is_dir;
+    int target_path_len = 0;
+    UNICODE_STRING nt_name;
+    BOOLEAN bret = FALSE;
+    NTSTATUS status;
+    HANDLE hlink;
+    DWORD dwret;
+
+    TRACE( "(%s %s %d): stub\n", debugstr_w(link), debugstr_w(target), flags );
+
+    is_relative = (RtlDetermineDosPathNameType_U( target ) == RELATIVE_PATH);
+    is_dir = (flags & SYMBOLIC_LINK_FLAG_DIRECTORY);
+    if (is_dir && !CreateDirectoryW( link, NULL ))
+        return FALSE;
+    hlink = CreateFileW( link, GENERIC_READ | GENERIC_WRITE, 0, 0,
+                         is_dir ? OPEN_EXISTING : CREATE_NEW,
+                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0 );
+    if (hlink == INVALID_HANDLE_VALUE)
+        goto cleanup;
+    if (is_relative)
+    {
+        UNICODE_STRING nt_path;
+        int len;
+
+        status = RtlDosPathNameToNtPathName_U_WithStatus( link, &nt_path, NULL, NULL );
+        if (status != STATUS_SUCCESS)
+        {
+            SetLastError( RtlNtStatusToDosError(status) );
+            goto cleanup;
+        }
+        /* obtain the path of the link */
+        for (; nt_path.Length > 0; nt_path.Length -= sizeof(WCHAR))
+        {
+            WCHAR c = nt_path.Buffer[nt_path.Length/sizeof(WCHAR)];
+            if (c == '/' || c == '\\')
+            {
+                nt_path.Length += sizeof(WCHAR);
+                break;
+            }
+        }
+        /* append the target to the link path */
+        target_path_len = nt_path.Length / sizeof(WCHAR);
+        len = target_path_len + (lstrlenW( target ) + 1);
+        target_path = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, len*sizeof(WCHAR) );
+        lstrcpynW( target_path, nt_path.Buffer, target_path_len+1 );
+        target_path[target_path_len+1] = 0;
+        lstrcatW( target_path, target );
+        RtlFreeUnicodeString( &nt_path );
+    }
+    else
+        target_path = (LPWSTR)target;
+    status = RtlDosPathNameToNtPathName_U_WithStatus( target_path, &nt_name, NULL, NULL );
+    if (status != STATUS_SUCCESS)
+    {
+        SetLastError( RtlNtStatusToDosError(status) );
+        goto cleanup;
+    }
+    if (is_relative && _wcsnicmp( target_path, nt_name.Buffer, target_path_len ) != 0)
+    {
+        SetLastError( RtlNtStatusToDosError(status) );
+        goto cleanup;
+    }
+    prefix_len = is_relative ? 0 : strlen("\\??\\");
+    string = &nt_name.Buffer[target_path_len];
+    string_len = lstrlenW( &string[prefix_len] );
+    data_size = (prefix_len + 2 * string_len + 2) * sizeof(WCHAR);
+    buffer_size = struct_size + data_size;
+    buffer = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, buffer_size );
+    buffer->ReparseTag = IO_REPARSE_TAG_SYMLINK;
+    buffer->ReparseDataLength = struct_size - header_size + data_size;
+    buffer->SymbolicLinkReparseBuffer.SubstituteNameLength = (prefix_len + string_len) * sizeof(WCHAR);
+    buffer->SymbolicLinkReparseBuffer.PrintNameOffset = (prefix_len + string_len + 1) * sizeof(WCHAR);
+    buffer->SymbolicLinkReparseBuffer.PrintNameLength = string_len * sizeof(WCHAR);
+    buffer->SymbolicLinkReparseBuffer.Flags = is_relative ? SYMLINK_FLAG_RELATIVE : 0;
+    subst_dest = &buffer->SymbolicLinkReparseBuffer.PathBuffer[0];
+    print_dest = &buffer->SymbolicLinkReparseBuffer.PathBuffer[prefix_len + string_len + 1];
+    lstrcpyW( subst_dest, string );
+    lstrcpyW( print_dest, &string[prefix_len] );
+    RtlFreeUnicodeString( &nt_name );
+    bret = DeviceIoControl( hlink, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_size, NULL, 0,
+                            &dwret, 0 );
+    HeapFree( GetProcessHeap(), 0, buffer );
+
+cleanup:
+    CloseHandle( hlink );
+    if (!bret)
+    {
+        if (is_dir)
+            RemoveDirectoryW( link );
+        else
+            DeleteFileW( link );
+    }
+    if (is_relative) HeapFree( GetProcessHeap(), 0, target_path );
+    return bret;
 }
 
 
@@ -1128,6 +1396,7 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     WCHAR *mask;
     BOOL has_wildcard = FALSE;
     FIND_FIRST_INFO *info = NULL;
+    UNICODE_STRING mask_str;
     UNICODE_STRING nt_name;
     OBJECT_ATTRIBUTES attr;
     IO_STATUS_BLOCK io;
@@ -1158,6 +1427,8 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
         SetLastError( ERROR_PATH_NOT_FOUND );
         return INVALID_HANDLE_VALUE;
     }
+
+    RtlInitUnicodeString( &mask_str, NULL );
 
     if (!mask && (device = RtlIsDosDeviceName_U( filename )))
     {
@@ -1192,8 +1463,26 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     }
     else
     {
+        static const WCHAR invalidW[] = { '<', '>', '\"', 0 };
+        DWORD mask_len = lstrlenW( mask );
+
+        /* strip invalid characters from mask */
+        while (mask_len && wcschr( invalidW, mask[mask_len - 1] ))
+            mask_len--;
+
+        if (!mask_len)
+        {
+            has_wildcard = TRUE;
+            RtlInitUnicodeString( &mask_str, L"*?" );
+        }
+        else
+        {
+            has_wildcard = wcspbrk( mask, L"*?" ) != NULL;
+            RtlInitUnicodeString( &mask_str, mask );
+            mask_str.Length = mask_len * sizeof(WCHAR);
+        }
+
         nt_name.Length = (mask - nt_name.Buffer) * sizeof(WCHAR);
-        has_wildcard = wcspbrk( mask, L"*?" ) != NULL;
         size = has_wildcard ? 8192 : max_entry_size;
     }
 
@@ -1254,9 +1543,6 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
     }
     else
     {
-        UNICODE_STRING mask_str;
-
-        RtlInitUnicodeString( &mask_str, mask );
         status = NtQueryDirectoryFile( info->handle, 0, NULL, NULL, &io, info->data, info->data_size,
                                        FileBothDirectoryInformation, FALSE, &mask_str, TRUE );
         if (status)
@@ -1411,6 +1697,41 @@ BOOL WINAPI DECLSPEC_HOTPATCH FindNextFileW( HANDLE handle, WIN32_FIND_DATAW *da
 
         memcpy( data->cFileName, dir_info->FileName, dir_info->FileNameLength );
         data->cFileName[dir_info->FileNameLength/sizeof(WCHAR)] = 0;
+
+        /* get reparse tag */
+        if (dir_info->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        {
+            REPARSE_DATA_BUFFER *buffer = NULL;
+            INT buffer_len;
+            HANDLE hlink;
+            DWORD dwret;
+            BOOL bret;
+            INT path_len = info->path.Length + dir_info->FileNameLength +
+                           sizeof(WCHAR);
+            WCHAR *path = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, path_len );
+
+            if (!path) break;
+
+            lstrcpynW( path, info->path.Buffer, info->path.Length/sizeof(WCHAR) + 1 );
+            lstrcatW( path, data->cFileName );
+
+            hlink = CreateFileW( path, GENERIC_READ | GENERIC_WRITE, 0, 0,
+                                 OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0 );
+            HeapFree( GetProcessHeap(), 0, path );
+            buffer_len = sizeof(*buffer) + 2*MAX_PATH*sizeof(WCHAR);
+            buffer = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, buffer_len );
+            if (!buffer)
+            {
+                CloseHandle( hlink );
+                break;
+            }
+            bret = DeviceIoControl( hlink, FSCTL_GET_REPARSE_POINT, NULL, 0, (LPVOID)buffer,
+                                    buffer_len, &dwret, 0 );
+            if (bret) data->dwReserved0 = buffer->ReparseTag;
+            HeapFree( GetProcessHeap(), 0, buffer );
+            CloseHandle( hlink );
+        }
 
         if (info->level != FindExInfoBasic)
         {
