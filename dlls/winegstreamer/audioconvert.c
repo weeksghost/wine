@@ -571,7 +571,7 @@ static HRESULT WINAPI audio_converter_ProcessMessage(IMFTransform *iface, MFT_ME
             return S_OK;
         default:
             FIXME("Unhandled message type %x.\n", message);
-            return E_NOTIMPL;
+            return S_OK;
     }
 }
 
