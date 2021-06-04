@@ -39,6 +39,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
     {
         DisableThreadLibraryCalls(instance);
         __wine_init_unix_lib(instance, reason, NULL, &unix_funcs);
+        init_gstreamer();
     }
     return TRUE;
 }
@@ -318,6 +319,9 @@ HRESULT WINAPI DllRegisterServer(void)
     HRESULT hr;
 
     TRACE(".\n");
+
+    if (FAILED(hr = mfplat_DllRegisterServer()))
+        return hr;
 
     if (FAILED(hr = __wine_register_resources()))
         return hr;

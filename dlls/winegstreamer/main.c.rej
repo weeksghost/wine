@@ -1,0 +1,12 @@
+--- dlls/winegstreamer/main.c
++++ dlls/winegstreamer/main.c
+@@ -319,6 +319,9 @@ HRESULT WINAPI DllRegisterServer(void)
+ 
+     TRACE(".\n");
+ 
++    if (FAILED(hr = mfplat_DllRegisterServer()))
++        return hr;
++
+     if (FAILED(hr = __wine_register_resources()))
+         return hr;
+ 

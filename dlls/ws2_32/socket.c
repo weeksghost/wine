@@ -467,6 +467,7 @@ struct ws2_async_io
 {
     async_callback_t *callback; /* must be the first field */
     struct ws2_async_io *next;
+    DWORD                size;
 };
 
 struct ws2_async_shutdown
@@ -514,17 +515,30 @@ static struct ws2_async_io *alloc_async_io( DWORD size, async_callback_t callbac
 {
     /* first free remaining previous fileinfos */
 
-    struct ws2_async_io *io = InterlockedExchangePointer( (void **)&async_io_freelist, NULL );
+    struct ws2_async_io *old_io = InterlockedExchangePointer( (void **)&async_io_freelist, NULL );
+    struct ws2_async_io *io = NULL;
 
-    while (io)
+    while (old_io)
     {
-        struct ws2_async_io *next = io->next;
-        HeapFree( GetProcessHeap(), 0, io );
-        io = next;
+        if (!io && old_io->size >= size && old_io->size <= max(4096, 4 * size))
+        {
+            io     = old_io;
+            size   = old_io->size;
+            old_io = old_io->next;
+        }
+        else
+        {
+            struct ws2_async_io *next = old_io->next;
+            HeapFree( GetProcessHeap(), 0, old_io );
+            old_io = next;
+        }
     }
 
-    io = HeapAlloc( GetProcessHeap(), 0, size );
-    if (io) io->callback = callback;
+    if (io || (io = HeapAlloc( GetProcessHeap(), 0, size )))
+    {
+        io->callback = callback;
+        io->size = size;
+    }
     return io;
 }
 
@@ -882,6 +896,21 @@ static void _enable_event( HANDLE s, unsigned int event,
         wine_server_call( req );
     }
     SERVER_END_REQ;
+}
+
+static DWORD _get_connect_time(SOCKET s)
+{
+    NTSTATUS status;
+    DWORD connect_time = ~0u;
+    SERVER_START_REQ( get_socket_info )
+    {
+        req->handle  = wine_server_obj_handle( SOCKET2HANDLE(s) );
+        status = wine_server_call( req );
+        if (!status)
+            connect_time = reply->connect_time / -10000000;
+    }
+    SERVER_END_REQ;
+    return connect_time;
 }
 
 static unsigned int _get_sock_mask(SOCKET s)
@@ -2220,6 +2249,13 @@ int WINAPI WS_bind(SOCKET s, const struct WS_sockaddr* name, int namelen)
                     else if (interface_bind(s, fd, &uaddr.addr))
                         in4->sin_addr.s_addr = htonl(INADDR_ANY);
                 }
+
+                if(name->sa_family ==  WS_AF_IPX){
+                    /* Quake (and similar family) fails if we can't bind to an IPX address. This often
+                     * doesn't work on Linux, so just fake success. */
+                    return 0;
+                }
+
                 if (bind(fd, &uaddr.addr, uaddrlen) < 0)
                 {
                     int loc_errno = errno;
@@ -2622,6 +2658,14 @@ INT WINAPI WS_getsockopt(SOCKET s, INT level,
                 SetLastError(wsaErrno());
                 ret = SOCKET_ERROR;
             }
+        #ifdef __linux__
+            else if (optname == SO_RCVBUF || optname == SO_SNDBUF)
+            {
+                /* For SO_RCVBUF / SO_SNDBUF, the Linux kernel always sets twice the value.
+                 * Divide by two to ensure applications do not get confused by the result. */
+                *(int *)optval /= 2;
+            }
+        #endif
             release_sock_fd( s, fd );
             return ret;
         case WS_SO_ACCEPTCONN:
@@ -2741,7 +2785,6 @@ INT WINAPI WS_getsockopt(SOCKET s, INT level,
 
         case WS_SO_CONNECT_TIME:
         {
-            static int pretendtime = 0;
             struct WS_sockaddr addr;
             int len = sizeof(addr);
 
@@ -2753,10 +2796,7 @@ INT WINAPI WS_getsockopt(SOCKET s, INT level,
             if (WS_getpeername(s, &addr, &len) == SOCKET_ERROR)
                 *(DWORD *)optval = ~0u;
             else
-            {
-                if (!pretendtime) FIXME("WS_SO_CONNECT_TIME - faking results\n");
-                *(DWORD *)optval = pretendtime++;
-            }
+                *(DWORD *)optval = _get_connect_time(s);
             *optlen = sizeof(DWORD);
             return ret;
         }
