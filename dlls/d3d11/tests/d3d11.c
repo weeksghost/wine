@@ -2266,6 +2266,8 @@ static void test_create_deferred_context(void)
 
     hr = ID3D11Device_CreateDeferredContext(device, 0, &context);
     todo_wine ok(hr == DXGI_ERROR_INVALID_CALL, "Failed to create deferred context, hr %#x.\n", hr);
+    if (hr == S_OK)
+        ID3D11DeviceContext_Release(context);
 
     refcount = ID3D11Device_Release(device);
     ok(!refcount, "Device has %u references left.\n", refcount);
@@ -2278,9 +2280,7 @@ static void test_create_deferred_context(void)
 
     expected_refcount = get_refcount(device) + 1;
     hr = ID3D11Device_CreateDeferredContext(device, 0, &context);
-    todo_wine ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
-    if (FAILED(hr))
-        goto done;
+    ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
     refcount = get_refcount(device);
     ok(refcount == expected_refcount, "Got refcount %u, expected %u.\n", refcount, expected_refcount);
     refcount = get_refcount(context);
@@ -2294,7 +2294,6 @@ static void test_create_deferred_context(void)
     refcount = ID3D11DeviceContext_Release(context);
     ok(!refcount, "Got unexpected refcount %u.\n", refcount);
 
-done:
     refcount = ID3D11Device_Release(device);
     ok(!refcount, "Device has %u references left.\n", refcount);
 }
@@ -32257,14 +32256,7 @@ static void test_deferred_context_state(void)
     ID3D11DeviceContext_PSSetConstantBuffers(immediate, 0, 1, &green_buffer);
 
     hr = ID3D11Device_CreateDeferredContext(device, 0, &deferred);
-    todo_wine ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
-    if (hr != S_OK)
-    {
-        ID3D11Buffer_Release(blue_buffer);
-        ID3D11Buffer_Release(green_buffer);
-        release_test_context(&test_context);
-        return;
-    }
+    ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
 
     ID3D11DeviceContext_PSGetConstantBuffers(deferred, 0, 1, &ret_buffer);
     ok(!ret_buffer, "Got unexpected buffer %p.\n", ret_buffer);
@@ -32321,9 +32313,7 @@ static void test_deferred_context_state(void)
     ID3D11DeviceContext_PSSetConstantBuffers(deferred, 0, 1, &blue_buffer);
     ID3D11DeviceContext_ExecuteCommandList(deferred, list1, FALSE);
     ID3D11DeviceContext_PSGetConstantBuffers(deferred, 0, 1, &ret_buffer);
-    todo_wine ok(!ret_buffer, "Got unexpected buffer %p.\n", ret_buffer);
-    if (ret_buffer)
-        ID3D11Buffer_Release(ret_buffer);
+    ok(!ret_buffer, "Got unexpected buffer %p.\n", ret_buffer);
 
     ID3D11CommandList_Release(list1);
     ID3D11DeviceContext_Release(deferred2);
@@ -32397,9 +32387,7 @@ static void test_deferred_context_swap_state(void)
     ID3D11DeviceContext1_PSSetConstantBuffers(immediate, 0, 1, &green_buffer);
 
     hr = ID3D11Device1_CreateDeferredContext1(device, 0, &deferred);
-    todo_wine ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
-    if (hr != S_OK)
-        goto out;
+    ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
 
     feature_level = ID3D11Device1_GetFeatureLevel(device);
     hr = ID3D11Device1_CreateDeviceContextState(device, 0, &feature_level, 1, D3D11_SDK_VERSION,
@@ -32420,7 +32408,6 @@ static void test_deferred_context_swap_state(void)
     ID3DDeviceContextState_Release(state);
     ID3D11DeviceContext1_Release(deferred);
 
-out:
     ID3D11Buffer_Release(green_buffer);
     ID3D11DeviceContext1_Release(immediate);
     ID3D11Device1_Release(device);
@@ -32455,12 +32442,7 @@ static void test_deferred_context_rendering(void)
     immediate = test_context.immediate_context;
 
     hr = ID3D11Device_CreateDeferredContext(device, 0, &deferred);
-    todo_wine ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
-    if (hr != S_OK)
-    {
-        release_test_context(&test_context);
-        return;
-    }
+    ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
 
     memset(&blend_desc, 0, sizeof(blend_desc));
 
@@ -32601,7 +32583,7 @@ static void test_deferred_context_rendering(void)
     ID3D11DeviceContext_OMSetBlendState(immediate, red_blend, NULL, D3D11_DEFAULT_SAMPLE_MASK);
     ID3D11DeviceContext_ExecuteCommandList(immediate, list1, FALSE);
     color = get_texture_color(test_context.backbuffer, 320, 240);
-    todo_wine ok(color == 0xffffffff, "Got unexpected color %#08x.\n", color);
+    ok(color == 0xffffffff, "Got unexpected color %#08x.\n", color);
 
     ID3D11CommandList_Release(list1);
 
@@ -32624,7 +32606,7 @@ static void test_deferred_context_rendering(void)
     ID3D11DeviceContext_OMSetBlendState(immediate, red_blend, NULL, D3D11_DEFAULT_SAMPLE_MASK);
     ID3D11DeviceContext_ExecuteCommandList(immediate, list1, FALSE);
     color = get_texture_color(test_context.backbuffer, 320, 240);
-    todo_wine ok(color == 0xff00ff00, "Got unexpected color %#08x.\n", color);
+    ok(color == 0xff00ff00, "Got unexpected color %#08x.\n", color);
 
     ID3D11CommandList_Release(list1);
 
@@ -32657,7 +32639,7 @@ static void test_deferred_context_rendering(void)
     ID3D11DeviceContext_OMSetBlendState(immediate, red_blend, NULL, D3D11_DEFAULT_SAMPLE_MASK);
     ID3D11DeviceContext_ExecuteCommandList(immediate, list2, FALSE);
     color = get_texture_color(test_context.backbuffer, 320, 240);
-    todo_wine ok(color == 0xffffffff, "Got unexpected color %#08x.\n", color);
+    ok(color == 0xffffffff, "Got unexpected color %#08x.\n", color);
 
     ID3D11CommandList_Release(list2);
 
@@ -32677,7 +32659,7 @@ static void test_deferred_context_rendering(void)
     ID3D11DeviceContext_OMSetBlendState(immediate, red_blend, NULL, D3D11_DEFAULT_SAMPLE_MASK);
     ID3D11DeviceContext_ExecuteCommandList(immediate, list2, FALSE);
     color = get_texture_color(test_context.backbuffer, 320, 240);
-    todo_wine ok(color == 0xff00ff00, "Got unexpected color %#08x.\n", color);
+    ok(color == 0xff00ff00, "Got unexpected color %#08x.\n", color);
 
     ID3D11CommandList_Release(list2);
 
@@ -32716,12 +32698,7 @@ static void test_deferred_context_map(void)
     immediate = test_context.immediate_context;
 
     hr = ID3D11Device_CreateDeferredContext(device, 0, &deferred);
-    todo_wine ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
-    if (hr != S_OK)
-    {
-        release_test_context(&test_context);
-        return;
-    }
+    ok(hr == S_OK, "Failed to create deferred context, hr %#x.\n", hr);
 
     for (i = 0; i < ARRAY_SIZE(data); ++i)
         data[i] = i;
@@ -32752,6 +32729,7 @@ static void test_deferred_context_map(void)
 
     hr = ID3D11DeviceContext_Map(deferred, (ID3D11Resource *)buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map_desc);
     ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+
     map_data = map_desc.pData;
     /* The previous contents of map_data are undefined and may in practice be
      * uninitialized garbage. */
