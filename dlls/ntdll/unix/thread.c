@@ -58,6 +58,9 @@
 #ifdef HAVE_LIBPROCSTAT_H
 #include <libprocstat.h>
 #endif
+#ifdef HAVE_PRCTL
+#include <sys/prctl.h>
+#endif
 
 #define NONAMELESSUNION
 #define NONAMELESSSTRUCT
@@ -1329,7 +1332,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, &sigset );
 
-    if ((status = virtual_alloc_teb( &teb ))) goto done;
+    if ((status = virtual_alloc_teb( &teb, zero_bits ))) goto done;
 
     if ((status = init_thread_stack( teb, zero_bits, stack_reserve, stack_commit )))
     {
@@ -1443,6 +1446,16 @@ void wait_suspend( CONTEXT *context )
 }
 
 
+/* "How to: Set a Thread Name in Native Code"
+ * https://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx */
+typedef struct tagTHREADNAME_INFO
+{
+   DWORD   dwType;     /* Must be 0x1000 */
+   LPCSTR  szName;     /* Pointer to name - limited to 9 bytes (8 characters + terminator) */
+   DWORD   dwThreadID; /* Thread ID (-1 = caller thread) */
+   DWORD   dwFlags;    /* Reserved for future use.  Must be zero. */
+} THREADNAME_INFO;
+
 /**********************************************************************
  *           send_debug_event
  *
@@ -1463,6 +1476,21 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
 
     for (i = 0; i < min( rec->NumberParameters, EXCEPTION_MAXIMUM_PARAMETERS ); i++)
         params[i] = rec->ExceptionInformation[i];
+
+    if (rec->ExceptionCode == 0x406d1388)
+    {
+        const THREADNAME_INFO *threadname = (const THREADNAME_INFO *)rec->ExceptionInformation;
+
+        if (threadname->dwThreadID == -1)
+        {
+#ifdef HAVE_PRCTL
+#ifndef PR_SET_NAME
+# define PR_SET_NAME 15
+#endif
+            prctl( PR_SET_NAME, threadname->szName );
+#endif
+        }
+    }
 
     SERVER_START_REQ( queue_exception_event )
     {
@@ -2279,7 +2307,20 @@ ULONG WINAPI NtGetCurrentProcessorNumber(void)
 
 #if defined(__linux__) && defined(__NR_getcpu)
     int res = syscall(__NR_getcpu, &processor, NULL, NULL);
-    if (res != -1) return processor;
+    if (res != -1)
+    {
+        struct cpu_topology_override *override = get_cpu_topology_override();
+        unsigned int i;
+
+        if (!override)
+            return processor;
+
+        for (i = 0; i < override->cpu_count; ++i)
+            if (override->host_cpu_id[i] == processor)
+                return i;
+
+        WARN("Thread is running on processor which is not in the defined override.\n");
+    }
 #endif
 
     if (peb->NumberOfProcessors > 1)
