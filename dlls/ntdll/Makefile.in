@@ -17,6 +17,7 @@ C_SRCS = \
 	exception.c \
 	handletable.c \
 	heap.c \
+	heap_lfh.c \
 	large_int.c \
 	loader.c \
 	locale.c \
@@ -43,7 +44,9 @@ C_SRCS = \
 	unix/cdrom.c \
 	unix/debug.c \
 	unix/env.c \
+	unix/esync.c \
 	unix/file.c \
+	unix/fsync.c \
 	unix/loader.c \
 	unix/loadorder.c \
 	unix/process.c \
