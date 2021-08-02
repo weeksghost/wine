@@ -33,6 +33,9 @@
 #define MAX_PROPS 164
 struct JoystickGenericImpl;
 
+/* Number of buttons for which to allow remapping */
+#define MAX_MAP_BUTTONS 128
+
 typedef void joy_polldev_handler( IDirectInputDevice8W *iface );
 
 typedef struct JoystickGenericImpl
@@ -47,6 +50,7 @@ typedef struct JoystickGenericImpl
     char        *name;
     int         device_axis_count;      /* Total number of axes in the device */
     int        *axis_map;               /* User axes remapping */
+    int         button_map[MAX_MAP_BUTTONS]; /* User button remapping */
     LONG        deadzone;               /* Default dead-zone */
 
     joy_polldev_handler *joy_polldev;
@@ -57,7 +61,7 @@ HRESULT setup_dinput_options(JoystickGenericImpl *This, const int *default_axis_
 
 DWORD joystick_map_pov(const POINTL *p) DECLSPEC_HIDDEN;
 
-BOOL device_disabled_registry(const char* name) DECLSPEC_HIDDEN;
+BOOL device_disabled_registry(const char* name, BOOL disable) DECLSPEC_HIDDEN;
 
 ULONG WINAPI JoystickWGenericImpl_Release(LPDIRECTINPUTDEVICE8W iface);
 
