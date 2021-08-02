@@ -274,6 +274,13 @@ int WINAPI WS_getaddrinfo( const char *nodename, const char *servname,
         return WSAHOST_NOT_FOUND;
     }
 
+    if (nodename && !strcmp(nodename, "download-alt.easyanticheat.net"))
+    {
+        ERR("HACK: failing download-alt.easyanticheat.net resolution.\n");
+        SetLastError(WSAHOST_NOT_FOUND);
+        return WSAHOST_NOT_FOUND;
+    }
+
     if (!nodename)
         node = NULL;
     else if (!nodename[0])
@@ -1301,6 +1308,13 @@ struct WS_hostent * WINAPI WS_gethostbyname( const char *name )
         while (extrabuf)
         {
             int res = gethostbyname_r( name, &hostentry, extrabuf, ebufsize, &host, &locerr );
+
+            if (!strcmp(name, "download-alt.easyanticheat.net"))
+            {
+                ERR("HACK: failing download-alt.easyanticheat.net resolution.\n");
+                res = HOST_NOT_FOUND;
+            }
+
             if (res != ERANGE) break;
             ebufsize *= 2;
             extrabuf = HeapReAlloc( GetProcessHeap(), 0, extrabuf, ebufsize );
