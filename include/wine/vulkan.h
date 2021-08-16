@@ -475,32 +475,32 @@
 #define VK_API_VERSION_1_0 VK_MAKE_API_VERSION(0, 1, 0, 0)
 #define VK_API_VERSION_1_1 VK_MAKE_API_VERSION(0, 1, 1, 0)
 #define VK_API_VERSION_1_2 VK_MAKE_API_VERSION(0, 1, 2, 0)
-#define VK_HEADER_VERSION 187
+#define VK_HEADER_VERSION 188
 #define VK_HEADER_VERSION_COMPLETE VK_MAKE_API_VERSION(0, 1, 2, VK_HEADER_VERSION)
 #define VK_DEFINE_HANDLE(object) typedef struct object##_T* object;
 #define VK_USE_64_BIT_PTR_DEFINES 0
 
 #ifndef VK_DEFINE_NON_DISPATCHABLE_HANDLE
-#if (VK_USE_64_BIT_PTR_DEFINES==1)
-#if (defined(__cplusplus) && (__cplusplus >= 201103L)) || (defined(_MSVC_LANG) && (_MSVC_LANG >= 201103L))
-#define VK_NULL_HANDLE nullptr
-#else
-#define VK_NULL_HANDLE ((void*)0)
-#endif
-#else
-#define VK_NULL_HANDLE 0ULL
-#endif
+    #if (VK_USE_64_BIT_PTR_DEFINES==1)
+        #if (defined(__cplusplus) && (__cplusplus >= 201103L)) || (defined(_MSVC_LANG) && (_MSVC_LANG >= 201103L))
+            #define VK_NULL_HANDLE nullptr
+        #else
+            #define VK_NULL_HANDLE ((void*)0)
+        #endif
+    #else
+        #define VK_NULL_HANDLE 0ULL
+    #endif
 #endif
 #ifndef VK_NULL_HANDLE
-#define VK_NULL_HANDLE 0
+    #define VK_NULL_HANDLE 0
 #endif
 
 #ifndef VK_DEFINE_NON_DISPATCHABLE_HANDLE
-#if (VK_USE_64_BIT_PTR_DEFINES==1)
-#define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef struct object##_T *object;
-#else
-#define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef uint64_t object;
-#endif
+    #if (VK_USE_64_BIT_PTR_DEFINES==1)
+        #define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef struct object##_T *object;
+    #else
+        #define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef uint64_t object;
+    #endif
 #endif
 VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkAccelerationStructureKHR)
 VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkAccelerationStructureNV)
