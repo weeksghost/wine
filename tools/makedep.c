@@ -3349,6 +3349,7 @@ static void output_module( struct makefile *make )
     if (debug_file) output_filename( strmake( "-Wl,--debug-file,%s", obj_dir_path( make, debug_file )));
     output_filenames( all_libs );
     output_filename( make->is_cross ? "$(CROSSLDFLAGS)" : "$(LDFLAGS)" );
+    output_filename( make->is_cross ? "-Wl,--file-alignment,4096" : "" );
     output( "\n" );
 
     if (make->unixobj_files.count)

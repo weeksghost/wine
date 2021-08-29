@@ -150,7 +150,7 @@ static void init_dialog(HWND dialog)
         SendDlgItemMessageW(dialog, IDC_DESKTOP_HEIGHT, EM_LIMITTEXT, RES_MAXLEN, 0);
     }
 
-    buf = get_reg_key(config_key, keypath("X11 Driver"), "GrabFullscreen", "N");
+    buf = get_reg_key(config_key, keypath("X11 Driver"), "GrabFullscreen", "Y");
     if (IS_OPTION_TRUE(*buf))
 	CheckDlgButton(dialog, IDC_FULLSCREEN_GRAB, BST_CHECKED);
     else

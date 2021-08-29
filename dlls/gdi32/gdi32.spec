@@ -87,9 +87,9 @@
 @ stdcall D3DKMTDestroyDCFromMemory(ptr) NtGdiDdDDIDestroyDCFromMemory
 @ stdcall D3DKMTDestroyDevice(ptr) NtGdiDdDDIDestroyDevice
 @ stdcall D3DKMTEscape(ptr) NtGdiDdDDIEscape
+@ stdcall D3DKMTOpenAdapterFromDeviceName(ptr)
 @ stdcall D3DKMTOpenAdapterFromGdiDisplayName(ptr)
 @ stdcall D3DKMTOpenAdapterFromHdc(ptr) NtGdiDdDDIOpenAdapterFromHdc
-@ stdcall D3DKMTOpenAdapterFromLuid(ptr) NtGdiDdDDIOpenAdapterFromLuid
 @ stdcall D3DKMTQueryStatistics(ptr) NtGdiDdDDIQueryStatistics
 @ stdcall D3DKMTSetQueuedLimit(ptr) NtGdiDdDDISetQueuedLimit
 @ stdcall D3DKMTSetVidPnSourceOwner(ptr) NtGdiDdDDISetVidPnSourceOwner

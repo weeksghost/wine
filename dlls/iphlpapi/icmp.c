@@ -5,6 +5,7 @@
  *   RW Hall, 1999, based on public domain code PING.C by Mike Muus (1983)
  *   and later works (c) 1989 Regents of Univ. of California - see copyright
  *   notice at end of source-code.
+ * Copyright 2015 Sebastian Lackner
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -32,6 +33,7 @@
  */
 
 #include "config.h"
+#include "wine/port.h"
 
 #include <sys/types.h>
 #ifdef HAVE_SYS_SOCKET_H
@@ -52,7 +54,9 @@
 #endif
 #include <stdarg.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
 #ifdef HAVE_UNISTD_H
 # include <unistd.h>
 #endif
@@ -61,6 +65,12 @@
 #endif
 #ifdef HAVE_SYS_POLL_H
 # include <sys/poll.h>
+#endif
+#ifdef HAVE_SYS_WAIT_H
+# include <sys/wait.h>
+#endif
+#if defined(__linux__)
+# include <linux/errqueue.h>
 #endif
 
 #define USE_WS_PREFIX
@@ -107,6 +117,7 @@ WINE_DECLARE_DEBUG_CHANNEL(winediag);
 typedef struct {
     int sid;
     IP_OPTION_INFORMATION default_opts;
+    BOOL unprivileged;
 } icmp_t;
 
 #define IP_OPTS_UNKNOWN     0
@@ -145,7 +156,7 @@ static int in_cksum(u_short *addr, int len)
 }
 
 /* Receive a reply (IPv4); this function uses, takes ownership of and will always free `buffer` */
-static DWORD icmp_get_reply(int sid, unsigned char *buffer, DWORD send_time, void *reply_buf, DWORD reply_size, DWORD timeout)
+static DWORD icmp_get_reply(int sid, unsigned char *buffer, DWORD send_time, void *reply_buf, DWORD reply_size, DWORD timeout, BOOL unprivileged)
 {
     int repsize = MAXIPLEN + MAXICMPLEN + min(65535, reply_size);
     struct icmp *icmp_header = (struct icmp*)buffer;
@@ -155,9 +166,11 @@ static DWORD icmp_get_reply(int sid, unsigned char *buffer, DWORD send_time, voi
     unsigned short id, seq, cksum;
     struct sockaddr_in addr;
     int ip_header_len = 0;
-    socklen_t addrlen;
     struct pollfd fdr;
     DWORD recv_time;
+    struct msghdr msg;
+    struct iovec iov;
+    char cbuf[512];
     int res;
 
     id = icmp_header->icmp_id;
@@ -165,13 +178,128 @@ static DWORD icmp_get_reply(int sid, unsigned char *buffer, DWORD send_time, voi
     cksum = icmp_header->icmp_cksum;
     fdr.fd = sid;
     fdr.events = POLLIN;
-    addrlen = sizeof(addr);
 
     while (poll(&fdr,1,timeout)>0) {
         recv_time = GetTickCount();
-        res=recvfrom(sid, buffer, repsize, 0, (struct sockaddr*)&addr, &addrlen);
+
+        iov.iov_base = buffer;
+        iov.iov_len = repsize;
+        msg.msg_name = &addr;
+        msg.msg_namelen = sizeof(addr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_flags = 0;
+        msg.msg_control = cbuf;
+        msg.msg_controllen = sizeof(cbuf);
+        res=recvmsg(sid, &msg, MSG_DONTWAIT);
         TRACE("received %d bytes from %s\n",res, inet_ntoa(addr.sin_addr));
         ier->Status=IP_REQ_TIMED_OUT;
+#if defined(__linux__)
+        if (unprivileged) {
+            if (res < 0) {
+                res = recvmsg(sid, &msg, MSG_DONTWAIT | MSG_ERRQUEUE);
+            }
+            /* What recvmsg() gave us for:
+             * - Linux's unprivileged ICMP sockets:
+             *    - On success:                 | reply's ICMP            | reply's payload               |
+             *    - MSG_ERRQUEUE:               | offending packet's ICMP | offending packet's payload    |
+             *                                   with some of the ICMP reply's data in the ancillary data
+             * - Everything else:
+             *    - On success:    | reply's IP | reply's ICMP            | reply's payload               |
+             *    - On error:      | reply's IP | reply's ICMP            | offending IP | offending ICMP |
+             *                                                            ----often found in payload-------
+             *
+             * So for Linux's parody implementation, we generate some semblance of the reply's IP header,
+             * and for errors, ICMP header, from the recvmsg() ancillary data, but ignore the offending
+             * packet's data for ICMP errors, as it's hard to reconstruct, and Windows doesn't seem to
+             * provide any ICMP error data anyway:
+             *     On FreeBSD router: route add -host 1.2.3.4 127.0.0.1 -reject
+             *     Ping 1.2.3.4 from Windows 7, the reply is ICMP host unreachable, IcmpSendEcho() returns 1
+             *     with:
+             *         ICMP_ECHO_REPLY: {
+             *             Status: 11003 (IP_DEST_HOST_UNREACHABLE)
+             *             DataSize: 0   <----- NO ICMP error data!!!
+             *             Options: {
+             *                 Ttl: 64
+             *                 Tos: 0
+             *                 Flags: 0
+             *             }
+             *         }
+             */
+            if (res >= 0) {
+                struct cmsghdr *cmsg;
+                int ttl = 0;
+                u_char tos = 0;
+                struct in_addr ip_dst = { 0 };
+                u_char *options = NULL;
+                int options_len = 0;
+                int err_type = 0;
+                int err_code = 0;
+                int err_info = 0;
+                int icmp_err_size = 0;
+                for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+                    if (cmsg->cmsg_level == SOL_IP) {
+                        if (cmsg->cmsg_type == IP_OPTIONS) {
+                            struct ip_opts *opts;
+                            u_char *option;
+                            opts = (struct ip_opts*) CMSG_DATA(cmsg);
+                            option = (u_char*) opts->ip_opts;
+                            while (IPOPT_NUMBER(*option) != IPOPT_EOL) {
+                                option += 1 + option[1];
+                            }
+                            options = (u_char*) opts->ip_opts;
+                            options_len = option - (u_char*)CMSG_DATA(cmsg);
+                        } else if (cmsg->cmsg_type == IP_PKTINFO) {
+                            struct in_pktinfo pktinfo;
+                            memcpy(&pktinfo, CMSG_DATA(cmsg), sizeof(pktinfo));
+                            ip_dst = pktinfo.ipi_addr;
+                        } else if (cmsg->cmsg_type == IP_TTL) {
+                            memcpy(&ttl, CMSG_DATA(cmsg), sizeof(int));
+                        } else if (cmsg->cmsg_type == IP_TOS) {
+                            tos = *(u_char*)CMSG_DATA(cmsg);
+                        } else if (cmsg->cmsg_type == IP_RECVERR) {
+                            struct sock_extended_err *err = (struct sock_extended_err*) CMSG_DATA(cmsg);
+                            res = 0; /* on error, trim all reply data, like Windows seems to */
+                            if (err->ee_origin == SO_EE_ORIGIN_ICMP) {
+                                err_type = err->ee_type;
+                                err_code = err->ee_code;
+                                err_info = err->ee_info;
+                                icmp_err_size = ICMP_MINLEN;
+                            } else {
+                                FIXME("unsupported ee_origin %d\n", err->ee_origin);
+                                break;
+                            }
+                        }
+                    }
+                }
+                memmove(&buffer[sizeof(struct ip) + options_len + icmp_err_size], buffer, res);
+                ip_header->ip_v = 4;
+                ip_header->ip_hl = (sizeof(struct ip) + options_len) >> 2;
+                ip_header->ip_tos = tos;
+                ip_header->ip_len = sizeof(struct ip) + options_len + icmp_err_size + res;
+                ip_header->ip_id = 0;
+                ip_header->ip_off = 0;
+                ip_header->ip_ttl = ttl;
+                ip_header->ip_p = IPPROTO_ICMP;
+                ip_header->ip_src = addr.sin_addr;
+                ip_header->ip_dst = ip_dst;
+                if (options)
+                    memcpy(&buffer[sizeof(struct ip)], options, options_len);
+                icmp_header = (struct icmp*)(((char*)ip_header) + (ip_header->ip_hl << 2));
+                if (icmp_err_size) {
+                    icmp_header->icmp_type = err_type;
+                    icmp_header->icmp_code = err_code;
+                    icmp_header->icmp_hun.ih_void = err_info; /* FIXME: check */
+                } else {
+                    /* Linux kernel overwrites the icmp_id with its own one, but only gives us replies that match it:
+                     * https://lwn.net/Articles/443051/
+                     * Rewrite it back so it matches what we expect later: */
+                    icmp_header->icmp_id = id;
+                }
+                res += sizeof(struct ip) + options_len + icmp_err_size;
+            }
+        }
+#endif
 
         /* Check whether we should ignore this packet */
         if ((ip_header->ip_p==IPPROTO_ICMP) && (res>=sizeof(struct ip)+ICMP_MINLEN)) {
@@ -229,7 +357,11 @@ static DWORD icmp_get_reply(int sid, unsigned char *buffer, DWORD send_time, voi
                     ier->Status=IP_SOURCE_QUENCH;
                     break;
                 }
+#if defined(__linux__)
+                if (!unprivileged && ier->Status!=IP_REQ_TIMED_OUT) {
+#else
                 if (ier->Status!=IP_REQ_TIMED_OUT) {
+#endif
                     struct ip* rep_ip_header;
                     struct icmp* rep_icmp_header;
                     /* The ICMP header size of all the packets we accept is the same */
@@ -359,6 +491,7 @@ done:
 HANDLE WINAPI Icmp6CreateFile(VOID)
 {
     icmp_t* icp;
+    BOOL unprivileged = FALSE;
 
     int sid=socket(AF_INET6,SOCK_RAW,IPPROTO_ICMPV6);
     if (sid < 0)
@@ -366,6 +499,23 @@ HANDLE WINAPI Icmp6CreateFile(VOID)
         /* Some systems (e.g. Linux 3.0+ and Mac OS X) support
            non-privileged ICMP via SOCK_DGRAM type. */
         sid=socket(AF_INET6,SOCK_DGRAM,IPPROTO_ICMPV6);
+        if (sid >= 0)
+        {
+#if defined(__linux__)
+            int on = 1;
+            if (setsockopt(sid, SOL_IP, IP_PKTINFO, &on, sizeof(on)))
+                ERR("setsockopt IP_PKTINFO failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVERR, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVERR failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVOPTS, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVOPTS failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVTOS, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVTOS failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVTTL, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVTTL failed, errno %d\n", errno);
+#endif
+            unprivileged = TRUE;
+        }
     }
     if (sid < 0) {
         ERR_(winediag)("Failed to use ICMPV6 (network ping), this requires special permissions.\n");
@@ -381,6 +531,7 @@ HANDLE WINAPI Icmp6CreateFile(VOID)
     }
     icp->sid=sid;
     icp->default_opts.OptionsSize=IP_OPTS_UNKNOWN;
+    icp->unprivileged = unprivileged;
     return (HANDLE)icp;
 }
 
@@ -416,7 +567,9 @@ DWORD WINAPI Icmp6SendEcho2(
  */
 HANDLE WINAPI IcmpCreateFile(VOID)
 {
+    static int once;
     icmp_t* icp;
+    BOOL unprivileged = FALSE;
 
     int sid=socket(AF_INET,SOCK_RAW,IPPROTO_ICMP);
     if (sid < 0)
@@ -424,21 +577,38 @@ HANDLE WINAPI IcmpCreateFile(VOID)
         /* Some systems (e.g. Linux 3.0+ and Mac OS X) support
            non-privileged ICMP via SOCK_DGRAM type. */
         sid=socket(AF_INET,SOCK_DGRAM,IPPROTO_ICMP);
+        if (sid >= 0)
+        {
+#if defined(__linux__)
+            int on = 1;
+            if (setsockopt(sid, SOL_IP, IP_PKTINFO, &on, sizeof(on)))
+                ERR("setsockopt IP_PKTINFO failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVERR, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVERR failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVOPTS, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVOPTS failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVTOS, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVTOS failed, errno %d\n", errno);
+            if (setsockopt(sid, SOL_IP, IP_RECVTTL, &on, sizeof(on)))
+                ERR("setsockopt IP_RECVTTL failed, errno %d\n", errno);
+#endif
+            unprivileged = TRUE;
+        }
     }
-    if (sid < 0) {
-        ERR_(winediag)("Failed to use ICMP (network ping), this requires special permissions.\n");
-        SetLastError(ERROR_ACCESS_DENIED);
-        return INVALID_HANDLE_VALUE;
+    if (sid < 0 && !once++) {
+        FIXME_(winediag)("Failed to use ICMP (network ping), this requires special permissions.\n");
+        FIXME_(winediag)("Falling back to system 'ping' command as a workaround.\n");
     }
 
     icp=HeapAlloc(GetProcessHeap(), 0, sizeof(*icp));
     if (icp==NULL) {
-        close(sid);
+        if (sid >= 0) close(sid);
         SetLastError(IP_NO_RESOURCES);
         return INVALID_HANDLE_VALUE;
     }
     icp->sid=sid;
     icp->default_opts.OptionsSize=IP_OPTS_UNKNOWN;
+    icp->unprivileged = unprivileged;
     return (HANDLE)icp;
 }
 
@@ -455,11 +625,242 @@ BOOL WINAPI IcmpCloseHandle(HANDLE  IcmpHandle)
         return FALSE;
     }
 
-    close( icp->sid );
+    if (icp->sid >= 0) close(icp->sid);
     HeapFree(GetProcessHeap (), 0, icp);
     return TRUE;
 }
 
+static DWORD system_icmp(
+    IPAddr                   DestinationAddress,
+    LPVOID                   RequestData,
+    WORD                     RequestSize,
+    PIP_OPTION_INFORMATION   RequestOptions,
+    LPVOID                   ReplyBuffer,
+    DWORD                    ReplySize,
+    DWORD                    Timeout
+    )
+{
+#ifdef HAVE_FORK
+    ICMP_ECHO_REPLY *reply = ReplyBuffer;
+    char ntoa_buffer[16]; /* 4*3 digits + 3 '.' + 1 '\0' */
+    char size_buffer[6];  /* 5 digits + '\0' */
+    char tos_buffer[4];   /* 3 digits + '\0' */
+    char ttl_buffer[4];   /* 3 digits + '\0' */
+    char time_buffer[11]; /* 10 digits + '\0' */
+    int i, pos, res, status, argc;
+    const char *argv[20];
+    struct in_addr addr;
+    int pipe_out[2];
+    pid_t pid, wpid;
+    char *ptr, *eol;
+    char buf[127];
+
+    /* Assemble the ping commandline */
+    argc = 0;
+    argv[argc++] = "ping";
+    argv[argc++] = "-c";    /* only send a single ping */
+    argv[argc++] = "1";
+    argv[argc++] = "-n";    /* numeric output only */
+    argv[argc++] = "-s";    /* request size */
+    sprintf(size_buffer, "%u", (RequestSize >= 16) ? RequestSize : 16);
+    argv[argc++] = size_buffer;
+    argv[argc++] = "-W";    /* timeout */
+#ifdef __linux__
+    /* The linux 'ping' utlity expects a time in seconds */
+    Timeout = (Timeout + 999) / 1000;
+#endif
+    sprintf(time_buffer, "%u", Timeout);
+    argv[argc++] = time_buffer;
+
+    if (RequestOptions)
+    {
+    #ifdef __linux__
+        argv[argc++] = "-Q";    /* tos option */
+    #else
+        argv[argc++] = "-z";    /* tos option */
+    #endif
+        sprintf(tos_buffer, "%u", RequestOptions->Tos);
+        argv[argc++] = tos_buffer;
+    #ifdef __linux__
+        /* TTL can only be specified for multicast addresses on FreeBSD/MacOS */
+        argv[argc++] = "-t";    /* ttl option */
+        sprintf(ttl_buffer, "%u", RequestOptions->Ttl);
+        argv[argc++] = ttl_buffer;
+    #endif
+    }
+
+    addr.s_addr = DestinationAddress;
+    if (!(ptr = inet_ntoa(addr)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    strcpy(ntoa_buffer, ptr);
+    argv[argc++] = ntoa_buffer;
+    argv[argc] = NULL;
+
+    /* Dump commandline for debugging purposes */
+    TRACE("Ping commandline: ");
+    for (i = 0; i < argc; i++)
+    {
+        TRACE("%s ", debugstr_a(argv[i]));
+    }
+    TRACE("\n");
+
+    /* Prefill the reply struct with fallback values */
+    memset(reply, 0, sizeof(*reply));
+    reply->Address       = DestinationAddress;
+    reply->RoundTripTime = 40;
+    reply->Options.Ttl   = 120;
+
+    /* Create communication pipes */
+#ifdef HAVE_PIPE2
+    if (pipe2(pipe_out, O_CLOEXEC) < 0)
+#endif
+    {
+        if (pipe(pipe_out) < 0)
+        {
+            SetLastError(ERROR_OUTOFMEMORY);
+            return 0;
+        }
+        fcntl(pipe_out[0], F_SETFD, FD_CLOEXEC);
+        fcntl(pipe_out[1], F_SETFD, FD_CLOEXEC);
+    }
+
+    /* Fork child process */
+    pid = fork();
+    if (pid == -1)
+    {
+        close(pipe_out[0]);
+        close(pipe_out[1]);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return 0;
+    }
+
+    /* Child process */
+    if (pid == 0)
+    {
+        static char lang_env[] = "LANG=C";
+
+        dup2(pipe_out[1], 1);
+        close(pipe_out[0]);
+        close(pipe_out[1]);
+        close(0);
+        close(2);
+
+        putenv(lang_env);
+        execvp(argv[0], (char **)argv);
+        _exit(1);
+    }
+
+    close(pipe_out[1]);
+
+    /* Wait for child and read output */
+    pos = 0;
+    do
+    {
+        if (pos >= sizeof(buf) - 1)
+        {
+            ERR("line too long, dropping buffer\n");
+            pos = 0;
+        }
+
+        /* read next block */
+        do
+        {
+            res = read(pipe_out[0], &buf[pos], (sizeof(buf) - 1) - pos);
+        }
+        while (res < 0 && errno == EINTR);
+        if (res < 0)
+        {
+            ERR("read failed: %s\n", strerror(errno));
+            break;
+        }
+
+        pos += res;
+        while (pos)
+        {
+            eol = memchr(buf, '\n', pos);
+            if (!eol) break;
+            *eol = 0;
+
+            TRACE("Received line: %s\n", debugstr_a(buf));
+
+            /* Interpret address */
+            if ((ptr = strstr(buf, "from ")))
+            {
+                int a, b, c, d;
+                if (sscanf(ptr + 5, "%u.%u.%u.%u", &a, &b, &c, &d) >= 4)
+                {
+                    reply->Address = a | (b << 8) | (c << 16) | (d << 24);
+                    addr.s_addr = reply->Address;
+                    TRACE("Got address %s\n", inet_ntoa(addr));
+                }
+            }
+
+            /* Interpret ttl */
+            if ((ptr = strstr(buf, "ttl=")))
+            {
+                int val;
+                if (sscanf(ptr + 4, "%u", &val) >= 1)
+                {
+                    reply->Options.Ttl = val;
+                    TRACE("Got ttl %u\n", val);
+                }
+            }
+
+            /* Interpret time */
+            if ((ptr = strstr(buf, "time=")))
+            {
+                float val;
+                if (sscanf(ptr + 5, "%f", &val) >= 1)
+                {
+                    reply->RoundTripTime = (unsigned int)(val + 0.5);
+                    TRACE("Got rtt = %u\n", reply->RoundTripTime);
+                }
+            }
+
+            memmove(buf, eol + 1, pos - (eol + 1 - buf));
+            pos -= (eol + 1 - buf);
+        }
+    }
+    while (res > 0);
+    close(pipe_out[0]);
+
+    /* reap the child process */
+    do
+    {
+        wpid = waitpid(pid, &status, 0);
+    }
+    while (wpid < 0 && errno == EINTR);
+
+    /* fill out remaining struct fields */
+    if (wpid >= 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    {
+        if (ReplySize < RequestSize + sizeof(*reply))
+        {
+            reply->Status   = IP_BUF_TOO_SMALL;
+            reply->DataSize = 0;
+            reply->Data     = NULL;
+        }
+        else
+        {
+            reply->Status   = 0;
+            reply->DataSize = RequestSize;
+            reply->Data     = (char *)reply + sizeof(*reply);
+            memcpy(reply->Data, RequestData, RequestSize);
+        }
+        return 1;
+    }
+
+    SetLastError(IP_REQ_TIMED_OUT);
+    return 0;
+#else
+    ERR("no fork support on this platform\n");
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return 0;
+#endif
+}
 
 /***********************************************************************
  *		IcmpSendEcho (IPHLPAPI.@)
@@ -569,6 +970,12 @@ DWORD WINAPI IcmpSendEcho2Ex(
         return 0;
     }
 
+    if (icp->sid < 0) {
+        WARN("using system ping command since SOCK_RAW was not supported.\n");
+        return system_icmp(DestinationAddress, RequestData, RequestSize,
+                           RequestOptions, ReplyBuffer, ReplySize, Timeout);
+    }
+
     /* Prepare the request */
     id=getpid() & 0xFFFF;
     seq=InterlockedIncrement(&icmp_sequence) & 0xFFFF;
@@ -664,7 +1071,7 @@ DWORD WINAPI IcmpSendEcho2Ex(
         return 0;
     }
 
-    return icmp_get_reply(icp->sid, buffer, send_time, ReplyBuffer, ReplySize, Timeout);
+    return icmp_get_reply(icp->sid, buffer, send_time, ReplyBuffer, ReplySize, Timeout, icp->unprivileged);
 }
 
 /*
