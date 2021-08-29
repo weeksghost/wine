@@ -247,6 +247,8 @@ static const struct object_ops sock_ops =
     add_queue,                    /* add_queue */
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
+    NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     sock_get_fd,                  /* get_fd */
@@ -2853,8 +2855,8 @@ static int poll_single_socket( struct sock *sock, int mask )
     return get_poll_flags( sock, pollfd.revents ) & mask;
 }
 
-static int poll_socket( struct sock *poll_sock, struct async *async, timeout_t timeout,
-                        unsigned int count, const struct poll_socket_input *input )
+static int poll_socket( struct sock *poll_sock, struct async *async, char exclusive,
+                        timeout_t timeout, unsigned int count, const struct poll_socket_input *input )
 {
     struct poll_socket_output *output;
     struct poll_req *req;
@@ -2897,6 +2899,29 @@ static int poll_socket( struct sock *poll_sock, struct async *async, timeout_t t
     req->async = (struct async *)grab_object( async );
     req->iosb = async_get_iosb( async );
     req->output = output;
+
+    if (exclusive)
+    {
+        struct poll_req *areq;
+
+        LIST_FOR_EACH_ENTRY( areq, &poll_list, struct poll_req, entry )
+        {
+            for (i = 0; i < areq->count; ++i)
+            {
+                struct sock *asock = areq->sockets[i].sock;
+
+                for (j = 0; j < req->count; ++j)
+                {
+                    if (asock != req->sockets[j].sock) continue;
+
+                    areq->iosb->status = STATUS_SUCCESS;
+                    areq->iosb->out_data = areq->output;
+                    areq->iosb->out_size = areq->count * sizeof(*areq->output);
+                    async_terminate( areq->async, STATUS_ALERTED );
+                }
+            }
+        }
+    }
 
     list_add_tail( &poll_list, &req->entry );
     async_set_completion_callback( async, free_poll_req, req );
@@ -2966,6 +2991,8 @@ static const struct object_ops ifchange_ops =
     no_add_queue,            /* add_queue */
     NULL,                    /* remove_queue */
     NULL,                    /* signaled */
+    NULL,                    /* get_esync_fd */
+    NULL,                    /* get_fsync_idx */
     no_satisfied,            /* satisfied */
     no_signal,               /* signal */
     ifchange_get_fd,         /* get_fd */
@@ -3186,6 +3213,8 @@ static const struct object_ops socket_device_ops =
     no_add_queue,               /* add_queue */
     NULL,                       /* remove_queue */
     NULL,                       /* signaled */
+    NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -3312,7 +3341,7 @@ DECL_HANDLER(poll_socket)
 
     if ((async = create_request_async( sock->fd, get_fd_comp_flags( sock->fd ), &req->async )))
     {
-        reply->wait = async_handoff( async, poll_socket( sock, async, req->timeout, count, input ), NULL, 0 );
+        reply->wait = async_handoff( async, poll_socket( sock, async, req->exclusive, req->timeout, count, input ), NULL, 0 );
         reply->options = get_fd_options( sock->fd );
         release_object( async );
     }

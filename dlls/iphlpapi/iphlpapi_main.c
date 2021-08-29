@@ -1160,7 +1160,7 @@ static DWORD dns_info_alloc( IP_ADAPTER_ADDRESSES *aa, ULONG family, ULONG flags
     char buf[FIELD_OFFSET(DNS_ADDR_ARRAY, AddrArray[3])];
     IP_ADAPTER_DNS_SERVER_ADDRESS *dns, **next;
     DWORD query = dns_servers_query_code( family );
-    DWORD err, i, size, attempt, sockaddr_len;
+    DWORD err = 0, i, size, attempt, sockaddr_len;
     WCHAR name[MAX_ADAPTER_NAME_LENGTH + 1];
     DNS_ADDR_ARRAY *servers;
     DNS_TXT_DATAW *search;
