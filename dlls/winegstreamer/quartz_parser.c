@@ -100,6 +100,7 @@ static bool amt_from_wg_format_audio(AM_MEDIA_TYPE *mt, const struct wg_format *
     switch (format->u.audio.format)
     {
     case WG_AUDIO_FORMAT_UNKNOWN:
+    case WG_AUDIO_FORMAT_AAC:
         return false;
 
     case WG_AUDIO_FORMAT_MPEG1_LAYER1:
@@ -268,6 +269,7 @@ static unsigned int get_image_size(const struct wg_format *format)
             return width * height * 3;
 
         case WG_VIDEO_FORMAT_UNKNOWN:
+        case WG_VIDEO_FORMAT_H264:
             break;
     }
 
@@ -785,11 +787,6 @@ static DWORD CALLBACK stream_thread(void *arg)
 static DWORD CALLBACK read_thread(void *arg)
 {
     struct parser *filter = arg;
-    LONGLONG file_size, unused;
-    uint32_t buffer_size = 0;
-    void *data = NULL;
-
-    IAsyncReader_Length(filter->reader, &file_size, &unused);
 
     TRACE("Starting read thread for filter %p.\n", filter);
 
@@ -798,29 +795,14 @@ static DWORD CALLBACK read_thread(void *arg)
         uint64_t offset;
         uint32_t size;
         HRESULT hr;
+        void *data;
 
-        if (!unix_funcs->wg_parser_get_next_read_offset(filter->wg_parser, &offset, &size))
+        if (!unix_funcs->wg_parser_get_read_request(filter->wg_parser, &data, &offset, &size))
             continue;
-
-        if (offset >= file_size)
-            size = 0;
-        else if (offset + size >= file_size)
-            size = file_size - offset;
-
-        if (size > buffer_size)
-        {
-            buffer_size = size;
-            data = realloc(data, size);
-        }
-
         hr = IAsyncReader_SyncRead(filter->reader, offset, size, data);
-        if (FAILED(hr))
-            ERR("Failed to read %u bytes at offset %I64u, hr %#x.\n", size, offset, hr);
-
-        unix_funcs->wg_parser_push_data(filter->wg_parser, SUCCEEDED(hr) ? data : NULL, size);
+        unix_funcs->wg_parser_complete_read_request(filter->wg_parser, SUCCEEDED(hr) ? WG_READ_SUCCESS : WG_READ_FAILURE, size);
     }
 
-    free(data);
     TRACE("Streaming stopped; exiting.\n");
     return 0;
 }
@@ -982,10 +964,7 @@ static HRESULT parser_sink_connect(struct strmbase_sink *iface, IPin *peer, cons
         goto err;
 
     if (!filter->init_gst(filter))
-    {
-        hr = E_FAIL;
         goto err;
-    }
 
     for (i = 0; i < filter->source_count; ++i)
     {
@@ -1469,7 +1448,7 @@ static HRESULT WINAPI GSTOutPin_DecideBufferSize(struct strmbase_source *iface,
 
     ret = amt_to_wg_format(&pin->pin.pin.mt, &format);
     assert(ret);
-    unix_funcs->wg_parser_stream_enable(pin->wg_stream, &format);
+    unix_funcs->wg_parser_stream_enable(pin->wg_stream, &format, NULL);
 
     /* We do need to drop any buffers that might have been sent with the old
      * caps, but this will be handled in parser_init_stream(). */
